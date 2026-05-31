@@ -25,11 +25,23 @@ def _try_unrar(archive_path: str, out_dir: str) -> tuple[bool, str]:
     return ok, output
 
 
+def _clear_dir(directory: str) -> None:
+    """Удалить содержимое каталога, оставив сам каталог."""
+    p = Path(directory)
+    for child in p.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
 def extract(archive_path: str, out_dir: str) -> list[Path]:
     """Распаковать RAR или ZIP. Сначала unar, при ошибке — unrar."""
     ok, output = _try_unar(archive_path, out_dir)
 
     if not ok:
+        # Чистим то что unar успел распаковать до падения
+        _clear_dir(out_dir)
         ok2, output2 = _try_unrar(archive_path, out_dir)
         if not ok2:
             raise RuntimeError(
