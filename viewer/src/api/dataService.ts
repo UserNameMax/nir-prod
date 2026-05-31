@@ -42,4 +42,11 @@ export const dataService = {
   getCalendar(object_id: string): Promise<{ dates: string[] }> {
     return get('/sensors/calendar', { object_id })
   },
+
+  getCalendarSummary(params: {
+    from_date?: string
+    to_date?: string
+  }): Promise<Array<{ day: string; objects_count: number }>> {
+    return get('/sensors/calendar/summary', params as Record<string, string>)
+  },
 }

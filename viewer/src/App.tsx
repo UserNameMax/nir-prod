@@ -3,6 +3,7 @@ import { ObjectList } from './pages/ObjectList'
 import { ObjectCalendar } from './pages/ObjectCalendar'
 import { DayView } from './pages/DayView'
 import { IngestPage } from './pages/IngestPage'
+import { GlobalCalendar } from './pages/GlobalCalendar'
 
 function Nav() {
   const base = 'px-4 py-2 text-sm rounded-lg transition-colors'
@@ -14,6 +15,9 @@ function Nav() {
       <span className="font-semibold text-slate-800 mr-4">ЦТП Monitor</span>
       <NavLink to="/" end className={({ isActive }) => isActive ? active : inactive}>
         Объекты
+      </NavLink>
+      <NavLink to="/calendar" className={({ isActive }) => isActive ? active : inactive}>
+        Календарь
       </NavLink>
       <NavLink to="/ingest" className={({ isActive }) => isActive ? active : inactive}>
         Загрузка данных
@@ -29,6 +33,7 @@ export default function App() {
         <Nav />
         <Routes>
           <Route path="/" element={<ObjectList />} />
+          <Route path="/calendar" element={<GlobalCalendar />} />
           <Route path="/object/:object_id" element={<ObjectCalendar />} />
           <Route path="/object/:object_id/day/:date" element={<DayView />} />
           <Route path="/ingest" element={<IngestPage />} />
