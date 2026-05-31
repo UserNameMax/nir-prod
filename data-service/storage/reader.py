@@ -65,10 +65,6 @@ def read_sensors(
     ).df()
 
     con.close()
-    if "record_id" in rows.columns:
-        rows["record_id"] = rows["record_id"].astype(str)
-    if "object_id" in rows.columns:
-        rows["object_id"] = rows["object_id"].astype(str)
     return _sanitize(rows.to_dict(orient="records")), total
 
 

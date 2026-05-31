@@ -10,7 +10,7 @@
 
 **Причина:** `sensors.parquet` из реальной выгрузки хранит `record_id` и `object_id` как `int64`. Pydantic-схема `SensorRecord` ожидает `str` — валидация ответа падала с `Input should be a valid string`.
 
-**Фикс:** после чтения через DuckDB явно кастим `rows["record_id"].astype(str)` и `rows["object_id"].astype(str)` в `read_sensors` перед возвратом.
+**Фикс:** `parser.py` уже делает `astype(str)` для `record_id` и `object_id` при нормализации форматов A и B — данные загруженные через ingestion-service всегда строки. Временный каст в `reader.py` убран. Старые parquet-файлы нужно перезалить через сервис.
 
 **Тест:** покрывается существующим `test_read_sensors_with_nan_sensor_values` (добавить вариант с int-колонками при следующем обновлении тестов).
 
