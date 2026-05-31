@@ -61,7 +61,7 @@ export function DayObjects() {
               <tr
                 key={obj.object_id}
                 className="hover:bg-blue-50 cursor-pointer transition-colors"
-                onClick={() => navigate(`/object/${obj.object_id}`)}
+                onClick={() => navigate(`/object/${obj.object_id}/day/${date}`)}
               >
                 <td className="px-4 py-3 text-slate-500 font-mono text-xs">{obj.object_id}</td>
                 <td className="px-4 py-3 font-medium text-slate-700">{obj.facility_name ?? '—'}</td>
