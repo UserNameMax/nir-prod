@@ -1,7 +1,22 @@
 import os
+import math
 import duckdb
 import pandas as pd
 from pathlib import Path
+
+
+def _sanitize(records: list[dict]) -> list[dict]:
+    """Заменяем float NaN/Inf → None чтобы JSON сериализация не падала."""
+    result = []
+    for row in records:
+        clean = {}
+        for k, v in row.items():
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                clean[k] = None
+            else:
+                clean[k] = v
+        result.append(clean)
+    return result
 
 
 def _con(data_dir: str) -> duckdb.DuckDBPyConnection:
@@ -153,7 +168,7 @@ def read_objects(
         f"ORDER BY object_id LIMIT {limit} OFFSET {offset}"
     ).df()
     con.close()
-    return rows.to_dict(orient="records"), total
+    return _sanitize(rows.to_dict(orient="records")), total
 
 
 def read_object_by_id(data_dir: str, object_id: str) -> dict | None:
@@ -168,4 +183,4 @@ def read_object_by_id(data_dir: str, object_id: str) -> dict | None:
     con.close()
     if rows.empty:
         return None
-    return rows.iloc[0].to_dict()
+    return _sanitize([rows.iloc[0].to_dict()])[0]

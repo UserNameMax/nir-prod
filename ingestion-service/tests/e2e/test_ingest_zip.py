@@ -14,10 +14,11 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from tests.fixtures.make_archives import (
     make_zip_format_a,
+    make_zip_format_b,
     make_zip_two_files,
     make_zip_with_overlap,
 )
-from tests.conftest import wait_job_done
+from tests.e2e.helpers import wait_job_done
 
 BASE_TS = 1_700_000_000
 
@@ -32,6 +33,7 @@ def test_upload_zip_returns_job_id(ingest_client, tmp_path):
     body = r.json()
     assert "job_id" in body
     assert body["status"] == "processing"
+    wait_job_done(ingest_client, body["job_id"])  # ждём чтобы не было race condition с clean_data
 
 
 def test_job_completes(ingest_client, tmp_path):

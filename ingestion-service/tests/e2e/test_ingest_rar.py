@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from tests.fixtures.make_xlsx import make_format_a
-from tests.conftest import wait_job_done
+from tests.e2e.helpers import wait_job_done
 
 
 def _make_rar(archive_path: Path, xlsx_path: Path) -> bool:

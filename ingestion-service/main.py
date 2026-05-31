@@ -132,8 +132,8 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
             total_inserted += data["inserted"]
             total_skipped += data["skipped_duplicates"]
 
-        # Objects
-        meta_records = meta.where(meta.notna(), other=None).to_dict(orient="records")
+        # Objects — astype(object) чтобы NaN не конвертировался обратно из None
+        meta_records = meta.astype(object).where(meta.notna(), other=None).to_dict(orient="records")
         resp = client.post("/objects/bulk", json=meta_records)
         resp.raise_for_status()
         objects_upserted = resp.json()["inserted"]
