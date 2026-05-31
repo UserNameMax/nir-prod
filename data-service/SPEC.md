@@ -76,8 +76,14 @@ GET /sensors/calendar
 GET /sensors/calendar/summary
     ?from_date=<YYYY-MM-DD>
     &to_date=<YYYY-MM-DD>
-    → [{"date": "2025-10-01", "objects_count": 4200}, ...]
+    → [{"day": "2025-10-01", "objects_count": 4200}, ...]
     Для каждого дня — количество уникальных объектов с данными
+
+GET /sensors/calendar/objects
+    ?date=<YYYY-MM-DD>   обязательный
+    &offset=0&limit=100
+    → Page[ObjectMeta]
+    Объекты у которых есть данные за указанный день (JOIN sensors + objects_meta)
 
 POST /sensors/bulk
      body: SensorRecord[]
