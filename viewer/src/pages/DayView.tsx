@@ -29,26 +29,47 @@ function formatDate(dateStr: string): string {
 }
 
 
+function getCachedCalendar(object_id: string): string[] | null {
+  try {
+    const raw = sessionStorage.getItem(`cal:${object_id}`)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+function setCachedCalendar(object_id: string, dates: string[]) {
+  try { sessionStorage.setItem(`cal:${object_id}`, JSON.stringify(dates)) } catch { /* ignore */ }
+}
+
 export function DayView() {
   const { object_id, date } = useParams<{ object_id: string; date: string }>()
   const navigate = useNavigate()
   const [records, setRecords] = useState<SensorRecord[]>([])
   const [dates, setDates] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loadingData, setLoadingData] = useState(true)
 
   useEffect(() => {
     if (!object_id || !date) return
-    setLoading(true)
+    setLoadingData(true)
 
     const { from, to } = dayToTs(date)
-    Promise.all([
-      dataService.getSensors({ object_id, from_ts: from, to_ts: to, limit: 10000 }),
-      dataService.getCalendar(object_id),
-    ]).then(([page, cal]) => {
-      setRecords(page.items)
-      setDates(cal.dates)
-      setLoading(false)
-    })
+
+    // Графики не ждут календарь
+    dataService.getSensors({ object_id, from_ts: from, to_ts: to, limit: 10000 })
+      .then(page => {
+        setRecords(page.items)
+        setLoadingData(false)
+      })
+
+    // Календарь — из кеша или по сети, не блокирует рендер
+    const cached = getCachedCalendar(object_id)
+    if (cached) {
+      setDates(cached)
+    } else {
+      dataService.getCalendar(object_id).then(cal => {
+        setDates(cal.dates)
+        setCachedCalendar(object_id, cal.dates)
+      })
+    }
   }, [object_id, date])
 
   const currentIdx = dates.indexOf(date ?? '')
@@ -81,11 +102,11 @@ export function DayView() {
 
       {/* Инфо */}
       <div className="text-sm text-slate-400 mb-5 text-center">
-        {loading ? 'Загрузка...' : `${records.length} измерений`}
+        {loadingData ? 'Загрузка...' : `${records.length} измерений`}
       </div>
 
       {/* Графики 2×2 */}
-      {!loading && (
+      {!loadingData && records.length > 0 && (
         <div className="grid grid-cols-2 gap-4">
           {CHARTS.map(c => (
             <SensorChart
@@ -100,7 +121,7 @@ export function DayView() {
         </div>
       )}
 
-      {!loading && records.length === 0 && (
+      {!loadingData && records.length === 0 && (
         <div className="text-center text-slate-400 py-16">Нет данных за этот день</div>
       )}
     </div>
