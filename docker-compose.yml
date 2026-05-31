@@ -6,6 +6,10 @@ services:
     volumes:
       - ../data:/app/data:rw
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8g
 
   ingestion-service:
     build: ./ingestion-service
@@ -16,6 +20,10 @@ services:
     depends_on:
       - data-service
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4g
 
   viewer:
     build:
