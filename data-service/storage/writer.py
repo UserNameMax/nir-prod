@@ -1,5 +1,7 @@
+from __future__ import annotations
 import os
 import threading
+import duckdb
 import pandas as pd
 import pyarrow.parquet as pq
 from pathlib import Path
@@ -29,23 +31,30 @@ META_SCHEMA = {
 }
 
 
-def _atomic_write(df: pd.DataFrame, target: str) -> None:
-    tmp = target + ".tmp"
-    df.to_parquet(tmp, index=False)
-    os.replace(tmp, target)
-
-
 def _read_ids(path: str, id_col: str) -> set:
-    """Читаем только одну колонку id — в разы быстрее чем весь файл."""
+    """Читаем только одну колонку id — не грузим весь файл."""
     table = pq.read_table(path, columns=[id_col])
     return set(table[id_col].to_pylist())
 
 
-def _ensure_parquet(path: str, schema: dict) -> pd.DataFrame:
-    if os.path.exists(path):
-        return pd.read_parquet(path)
-    cols = list(schema.keys())
-    return pd.DataFrame(columns=cols)
+def _duckdb_append(existing_path: str, new_df: pd.DataFrame) -> None:
+    """
+    Дописываем new_df к existing_path через DuckDB COPY.
+    DuckDB стримит существующий файл батчами — не грузит всё в pandas.
+    Атомарная замена через tmp-файл.
+    """
+    tmp = existing_path + ".tmp"
+    con = duckdb.connect()
+    con.register("new_records", new_df)
+    con.execute(f"""
+        COPY (
+            SELECT * FROM read_parquet('{existing_path}')
+            UNION ALL
+            SELECT * FROM new_records
+        ) TO '{tmp}' (FORMAT PARQUET)
+    """)
+    con.close()
+    os.replace(tmp, existing_path)
 
 
 def bulk_insert_sensors(
@@ -57,24 +66,22 @@ def bulk_insert_sensors(
 
     path = str(Path(data_dir) / "sensors.parquet")
     new_df = pd.DataFrame(records)
+    new_df["record_id"] = new_df["record_id"].astype(str)
+    new_df["object_id"] = new_df["object_id"].astype(str)
 
     with _sensors_lock:
         if not os.path.exists(path):
-            _atomic_write(new_df, path)
+            new_df.to_parquet(path, index=False)
             return len(new_df), 0
 
-        # Читаем только record_id — не грузим все 8 колонок в память
+        # Читаем только record_id (1 колонка из 8) — быстро
         existing_ids = _read_ids(path, "record_id")
-        new_df["record_id"] = new_df["record_id"].astype(str)
-
         to_insert = new_df[~new_df["record_id"].isin(existing_ids)]
         skipped = len(new_df) - len(to_insert)
 
         if not to_insert.empty:
-            # Полный файл читаем только когда есть что дописывать
-            existing = pd.read_parquet(path)
-            merged = pd.concat([existing, to_insert], ignore_index=True)
-            _atomic_write(merged, path)
+            # DuckDB стримит существующий файл — не грузим 36М строк в pandas
+            _duckdb_append(path, to_insert)
 
         return len(to_insert), skipped
 
@@ -82,7 +89,7 @@ def bulk_insert_sensors(
 def bulk_upsert_objects(
     data_dir: str, records: list[dict]
 ) -> tuple[int, int]:
-    """Upsert по object_id. Старые записи приоритетнее (object_type заполнен)."""
+    """Upsert по object_id. Старые записи приоритетнее."""
     if not records:
         return 0, 0
 
@@ -94,22 +101,22 @@ def bulk_upsert_objects(
         if not os.path.exists(path):
             deduped = new_df.sort_values("object_type", na_position="last") \
                             .drop_duplicates(subset=["object_id"], keep="first")
-            _atomic_write(deduped, path)
+            deduped.to_parquet(path, index=False)
             return len(deduped), 0
 
-        # Читаем только object_id
+        # Читаем только object_id (1 колонка из 6) — быстро
         existing_ids = _read_ids(path, "object_id")
-        new_df["object_id"] = new_df["object_id"].astype(str)
-
         new_objects = new_df[~new_df["object_id"].isin(existing_ids)]
         new_objects = new_objects.sort_values("object_type", na_position="last") \
                                  .drop_duplicates(subset=["object_id"], keep="first")
         skipped = len(new_df) - len(new_objects)
 
         if not new_objects.empty:
+            # objects маленькие (~4к строк) — pandas здесь ок
             existing = pd.read_parquet(path)
             merged = pd.concat([existing, new_objects], ignore_index=True)
-            _atomic_write(merged, path)
+            merged.to_parquet(path + ".tmp", index=False)
+            os.replace(path + ".tmp", path)
 
         return len(new_objects), skipped
 
@@ -118,10 +125,10 @@ def update_object(data_dir: str, object_id: str, updates: dict) -> dict | None:
     path = str(Path(data_dir) / "objects_meta.parquet")
 
     with _meta_lock:
-        existing = _ensure_parquet(path, META_SCHEMA)
-        if existing.empty:
+        if not os.path.exists(path):
             return None
 
+        existing = pd.read_parquet(path)
         existing["object_id"] = existing["object_id"].astype(str)
         mask = existing["object_id"] == str(object_id)
         if not mask.any():
@@ -131,5 +138,6 @@ def update_object(data_dir: str, object_id: str, updates: dict) -> dict | None:
             if key in existing.columns and val is not None:
                 existing.loc[mask, key] = val
 
-        _atomic_write(existing, path)
+        existing.to_parquet(path + ".tmp", index=False)
+        os.replace(path + ".tmp", path)
         return existing[mask].iloc[0].to_dict()
