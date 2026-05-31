@@ -22,16 +22,27 @@
 
 ## Потокобезопасность записи
 
-Два независимых `threading.Lock` — `sensors_lock` и `meta_lock`.
+Два независимых `threading.Lock` — `sensors_lock` и `meta_lock`. Два отдельных lock-а позволяют параллельно писать sensors и meta.
 
-Алгоритм записи под lock:
-1. Загрузить текущий parquet в DuckDB
-2. Вставить новые строки (upsert по ключу)
-3. Сохранить в `<name>.tmp.parquet`
+### Алгоритм `bulk_insert_sensors` (под lock)
+
+1. Прочитать только колонку `record_id` через pyarrow (`pq.read_table(columns=["record_id"])`) — 1 колонка вместо 8, быстро
+2. Отфильтровать новые строки (не дубликаты)
+3. Если есть что записывать — DuckDB streaming merge:
+   ```sql
+   COPY (
+       SELECT * FROM read_parquet('sensors.parquet')  -- стримит батчами
+       UNION ALL
+       SELECT * FROM new_records                       -- новые строки из памяти
+   ) TO 'sensors.parquet.tmp' (FORMAT PARQUET)
+   ```
 4. `os.replace(tmp, target)` — атомарный rename
-5. Освободить lock
 
-Два отдельных lock-а позволяют параллельно писать sensors и meta.
+**Почему DuckDB а не pandas:** `pd.read_parquet` загружает весь файл (36М строк) в RAM → OOM при больших архивах. DuckDB стримит существующий файл батчами — пиковая память ~300-500 МБ независимо от размера файла.
+
+### Алгоритм `bulk_upsert_objects` (под lock)
+
+Аналогично, но файл объектов маленький (~4к строк) — используется pandas concat (без DuckDB).
 
 ---
 
