@@ -60,7 +60,8 @@ async def upload(files: list[UploadFile] = File(...)):
         tmp_dir = tempfile.mkdtemp()
         archive_path = str(Path(tmp_dir) / file.filename)
         with open(archive_path, "wb") as f:
-            f.write(await file.read())
+            while chunk := await file.read(1024 * 1024):  # читаем по 1 МБ
+                f.write(chunk)
 
         job = jobs.create_job(file.filename)
         await _queue.put((job.job_id, archive_path, tmp_dir))
