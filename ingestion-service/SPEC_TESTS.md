@@ -165,3 +165,23 @@ docker-compose.test.yml
 #### `test_merge_partial_overlap`
 **Что:** архив B содержит 5 строк из архива A (одинаковые `record_id`) и 5 новых → вставляется ровно 5.  
 **Assert:** `second_job.stats.sensors_inserted == 5`, `sensors_duplicates == 5`
+
+---
+
+## Регрессионные тесты (баги найденные в e2e)
+
+### `tests/unit/test_cleaner.py` — баг BUG-001
+
+**BUG-001 — NaN в meta DataFrame не конвертируется в None перед JSON-сериализацией**
+
+**Воспроизведение:** формат B не содержит `object_type` и `facility_type` → поля заполняются `np.nan`. При конвертации `df.to_dict()` `float('nan')` попадает в словарь. `json.dumps` падает с `ValueError: Out of range float values are not JSON compliant: nan`.
+
+**Фикс:** `meta.astype(object).where(meta.notna(), other=None).to_dict(orient="records")` — приведение к `object` dtype перед заменой предотвращает обратную конвертацию `None → NaN`.
+
+#### `test_meta_nan_to_none_format_b`
+**Что:** после нормализации формата B и `dedup_meta` — конвертация в JSON-payload не должна содержать `NaN`.  
+**Assert:** все значения в словарях либо не-float, либо `None` — никаких `float('nan')`.
+
+#### `test_meta_nan_to_none_mixed`
+**Что:** DataFrame с частично заполненными полями (некоторые строки имеют `object_type`, другие — NaN) корректно конвертируется.  
+**Assert:** NaN-поля → `None`, заполненные поля сохраняются.

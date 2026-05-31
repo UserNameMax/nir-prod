@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import math
 import duckdb
@@ -64,7 +65,7 @@ def read_sensors(
     ).df()
 
     con.close()
-    return rows.to_dict(orient="records"), total
+    return _sanitize(rows.to_dict(orient="records")), total
 
 
 def read_sensors_calendar(data_dir: str, object_id: str) -> list[str]:
