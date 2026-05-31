@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { dataService } from '../api/dataService'
 
 const MONTHS = [
@@ -32,6 +33,7 @@ export function GlobalCalendar() {
   // day -> objects_count
   const [summary, setSummary] = useState<Map<string, number>>(new Map())
   const [loading, setLoading] = useState(true)
+  const navigate = useNavigate()
 
   useEffect(() => {
     setLoading(true)
@@ -63,7 +65,7 @@ export function GlobalCalendar() {
   const daysWithData = [...summary.values()].filter(n => n > 0).length
 
   return (
-    <div className="max-w-lg mx-auto p-6">
+    <div className="p-6">
       <h1 className="text-2xl font-semibold text-slate-800 mb-1">Календарь данных</h1>
       <p className="text-sm text-slate-400 mb-6">Дни, в которые есть показания хотя бы по одному объекту</p>
 
@@ -99,11 +101,12 @@ export function GlobalCalendar() {
                 <div
                   key={dateStr}
                   title={hasData ? `${count} объектов` : undefined}
+                  onClick={hasData ? () => navigate(`/calendar/${dateStr}`) : undefined}
                   className={[
                     'aspect-square flex items-center justify-center rounded-lg text-sm transition-colors',
                     isToday ? 'ring-2 ring-blue-400 ring-offset-1' : '',
                     hasData
-                      ? 'bg-blue-500 text-white font-medium cursor-default'
+                      ? 'bg-blue-500 text-white font-medium cursor-pointer hover:bg-blue-600'
                       : 'text-slate-300 cursor-default',
                   ].join(' ')}
                 >

@@ -137,6 +137,52 @@ def read_sensors_health(data_dir: str) -> dict:
     return {"sensors_count": row[0], "period_from": row[1], "period_to": row[2]}
 
 
+def read_objects_by_day(
+    data_dir: str,
+    date: str,
+    offset: int = 0,
+    limit: int = 100,
+) -> tuple[list[dict], int]:
+    sensors_path = _sensors_path(data_dir)
+    meta_path = _meta_path(data_dir)
+    if not _file_exists(sensors_path):
+        return [], 0
+
+    con = _con(data_dir)
+
+    base = f"""
+        SELECT DISTINCT object_id
+        FROM read_parquet('{sensors_path}')
+        WHERE strftime(to_timestamp(ts_recorded), '%Y-%m-%d') = '{date}'
+    """
+
+    if _file_exists(meta_path):
+        count_q = f"""
+            SELECT COUNT(*) FROM ({base}) ids
+            LEFT JOIN read_parquet('{meta_path}') m USING (object_id)
+        """
+        rows_q = f"""
+            SELECT m.* FROM ({base}) ids
+            LEFT JOIN read_parquet('{meta_path}') m USING (object_id)
+            ORDER BY m.object_id
+            LIMIT {limit} OFFSET {offset}
+        """
+    else:
+        count_q = f"SELECT COUNT(*) FROM ({base})"
+        rows_q = f"""
+            SELECT object_id, NULL as object_type, NULL as facility_type,
+                   NULL as facility_name, NULL as municipality, NULL as rso
+            FROM ({base})
+            ORDER BY object_id
+            LIMIT {limit} OFFSET {offset}
+        """
+
+    total = con.execute(count_q).fetchone()[0]
+    rows = con.execute(rows_q).df()
+    con.close()
+    return _sanitize(rows.to_dict(orient="records")), total
+
+
 def read_objects(
     data_dir: str,
     municipality: str | None = None,

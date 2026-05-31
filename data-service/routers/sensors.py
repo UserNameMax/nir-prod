@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query, Depends
 from typing import Annotated
 
-from schemas import SensorRecord, BulkResult, Page
+from schemas import SensorRecord, BulkResult, Page, ObjectMeta
 from storage import reader, writer
 from dependencies import get_data_dir
 
@@ -30,6 +30,17 @@ def get_calendar(
 ):
     dates = reader.read_sensors_calendar(data_dir, object_id)
     return {"dates": dates}
+
+
+@router.get("/calendar/objects", response_model=Page[ObjectMeta])
+def get_objects_by_day(
+    date: Annotated[str, Query(description="YYYY-MM-DD")],
+    offset: int = 0,
+    limit: int = Query(default=100, le=LIMIT_MAX),
+    data_dir: str = Depends(get_data_dir),
+):
+    items, total = reader.read_objects_by_day(data_dir, date, offset, limit)
+    return Page(items=items, total=total, offset=offset, limit=limit)
 
 
 @router.get("/calendar/summary")

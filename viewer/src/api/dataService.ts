@@ -49,4 +49,12 @@ export const dataService = {
   }): Promise<Array<{ day: string; objects_count: number }>> {
     return get('/sensors/calendar/summary', params as Record<string, string>)
   },
+
+  getObjectsByDay(params: {
+    date: string
+    offset?: number
+    limit?: number
+  }): Promise<Page<ObjectMeta>> {
+    return get('/sensors/calendar/objects', params as Record<string, string | number>)
+  },
 }

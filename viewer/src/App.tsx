@@ -4,6 +4,7 @@ import { ObjectCalendar } from './pages/ObjectCalendar'
 import { DayView } from './pages/DayView'
 import { IngestPage } from './pages/IngestPage'
 import { GlobalCalendar } from './pages/GlobalCalendar'
+import { DayObjects } from './pages/DayObjects'
 
 function Nav() {
   const base = 'px-4 py-2 text-sm rounded-lg transition-colors'
@@ -34,6 +35,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<ObjectList />} />
           <Route path="/calendar" element={<GlobalCalendar />} />
+          <Route path="/calendar/:date" element={<DayObjects />} />
           <Route path="/object/:object_id" element={<ObjectCalendar />} />
           <Route path="/object/:object_id/day/:date" element={<DayView />} />
           <Route path="/ingest" element={<IngestPage />} />
