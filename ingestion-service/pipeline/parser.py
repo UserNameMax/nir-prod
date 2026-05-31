@@ -7,12 +7,22 @@ import pandas as pd
 def _to_datetime(series: pd.Series) -> pd.Series:
     """Parse datetime column regardless of source format.
 
-    - xlsx/xls: already datetime or string → pd.to_datetime
-    - xlsb: float (Excel serial days since 1899-12-30) → convert with unit='D'
+    - xlsx/xls (dtype=object): строки или Python datetime → pd.to_datetime
+    - xlsb: float (Excel serial days since 1899-12-30) → unit='D'
     """
-    if pd.api.types.is_numeric_dtype(series):
+    # Проверяем первый непустой элемент: если float — xlsb serial date
+    sample = series.dropna().iloc[0] if not series.dropna().empty else None
+    if isinstance(sample, float):
         return pd.to_datetime(series, unit="D", origin="1899-12-30", errors="coerce")
     return pd.to_datetime(series, errors="coerce")
+
+
+def _to_unix(series: pd.Series) -> pd.Series:
+    """Конвертировать datetime series в unix seconds (float64). NaT → NaN."""
+    dt = _to_datetime(series)
+    unix = dt.astype("int64") // 10**9
+    # iNaT (от NaT) → NaN; результат float64, cleaner удалит NaN-строки
+    return unix.where(dt.notna())
 
 
 def detect_format(df: pd.DataFrame) -> str:
@@ -52,10 +62,12 @@ def normalize_format_a(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         if col not in df.columns:
             df[col] = np.nan
 
-    df["ts_recorded"] = _to_datetime(df["ts_recorded_dt"]).astype("int64") // 10**9
-    df["ts_measurement"] = _to_datetime(df["ts_measurement_dt"]).astype("int64") // 10**9
+    df["ts_recorded"] = _to_unix(df["ts_recorded_dt"])
+    df["ts_measurement"] = _to_unix(df["ts_measurement_dt"])
     df["object_id"] = df["object_id"].astype(str)
     df["record_id"] = df["record_id"].astype(str)
+    for col in ("t_supply", "t_return", "p_supply", "p_return"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
     sensors = df[
         ["record_id", "object_id", "ts_measurement", "t_supply", "t_return", "p_supply", "p_return", "ts_recorded"]
@@ -79,10 +91,12 @@ def normalize_format_b(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
 
-    df["ts_recorded"] = _to_datetime(df["ts_recorded_dt"]).astype("int64") // 10**9
+    df["ts_recorded"] = _to_unix(df["ts_recorded_dt"])
     df["ts_measurement"] = df["ts_recorded"]
     df["object_id"] = df["object_id"].astype(str)
     df["record_id"] = df["record_id"].astype(str)
+    for col in ("t_supply", "t_return", "p_supply", "p_return"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
     df["object_type"] = np.nan
     df["facility_type"] = np.nan
 
@@ -109,7 +123,7 @@ def parse_xlsx(path: Path) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     else:
         engine = None
     try:
-        raw = pd.read_excel(path, engine=engine)
+        raw = pd.read_excel(path, engine=engine, dtype=object)
     except Exception as exc:
         print(f"[parser] failed to read {path.name}: {exc}", flush=True)
         return None

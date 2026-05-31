@@ -182,7 +182,7 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
         resp.raise_for_status()
         objects_upserted = resp.json()["inserted"]
 
-    ts = pd.to_datetime(sensors["ts_recorded"], unit="s")
+    ts = pd.to_datetime(sensors.loc[sensors["ts_recorded"] > 0, "ts_recorded"], unit="s")
     jobs.update_job(
         job_id,
         status="done",
@@ -193,8 +193,8 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
             sensors_inserted=total_inserted,
             sensors_duplicates=total_skipped,
             objects_upserted=objects_upserted,
-            period_from=ts.min().to_pydatetime(),
-            period_to=ts.max().to_pydatetime(),
+            period_from=ts.min().to_pydatetime() if not ts.empty else None,
+            period_to=ts.max().to_pydatetime() if not ts.empty else None,
             objects_count=sensors["object_id"].nunique(),
         ),
     )

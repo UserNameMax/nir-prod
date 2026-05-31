@@ -21,6 +21,23 @@
 
 ---
 
+## BUG-009 — `_to_unix` заменял NaT на 0 (эпоха 1970), строки проходили cleaner
+
+**Обнаружен:** прод (после фикса BUG-008)  
+**Сервис:** ingestion-service  
+**Файл:** `pipeline/parser.py`, `main.py`
+
+**Причина:** `_to_unix` делал `fillna(pd.Timestamp(0))` перед `astype("int64")`. Строки с невалидными датами получали `ts_recorded = 0`. Cleaner удаляет строки где `ts_recorded` **is NaN** — но 0 это не NaN, строки проходили. `period_from` = min(ts_recorded) = 1970-01-01.
+
+**Фикс:**
+1. `_to_unix` теперь возвращает `float64`: `unix.where(dt.notna())` — NaT → `NaN`. Cleaner корректно удаляет такие строки.
+2. `period_from/to` в `main.py` фильтрует `ts_recorded > 0` перед `min/max`.
+3. 130k строк с ts~0 удалены из parquet точечным DuckDB-скриптом.
+
+**Тест:** `test_cleaner.py::test_drop_row_invalid_ts_recorded_zero` — строка с `ts_recorded=0` должна удаляться.
+
+---
+
 ## BUG-005 — unar на arm64/Linux не может распаковать некоторые RAR5
 
 **Обнаружен:** прод (реальные данные)  

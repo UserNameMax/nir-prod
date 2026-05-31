@@ -132,11 +132,14 @@ unrar x -y <archive> <tmpdir>/      # попытка 2 (fallback)
 
 Временны́е колонки (`*_dt`) конвертируются в unix seconds (`int64`). В формате B `ts_measurement = ts_recorded`.
 
-**Особенность `.xlsb`:** файлы Excel Binary хранят даты как числа с плавающей точкой (Excel serial — дней с 30.12.1899). Стандартный `pd.to_datetime` трактует их как наносекунды и возвращает 1970-01-01. Применяется специальная конвертация:
-```python
-pd.to_datetime(series, unit="D", origin="1899-12-30", errors="coerce")
-```
-Для `.xlsx`/`.xls` используется обычный `pd.to_datetime`.
+**Особенности формата `.xlsb`:**
+- Файлы Excel Binary хранят даты как float (Excel serial — дней с 30.12.1899). Стандартный `pd.to_datetime` трактует их как наносекунды → 1970-01-01. Применяется конвертация `unit="D", origin="1899-12-30"`.
+- Для `.xlsx`/`.xls` используется обычный `pd.to_datetime`.
+
+**Конвертация временны́х меток:**
+Все файлы читаются с `dtype=object` (предотвращает падение при out-of-bounds датах во время `read_excel`). Конвертация выполняется функцией `_to_unix(series) → float64`:
+- NaT (невалидные даты) → `NaN` (не 0!), такие строки удаляются cleaner-ом как missing required field
+- Числовые колонки (`t_supply`, `p_supply` и т.д.) явно приводятся через `pd.to_numeric(errors="coerce")`
 
 ### Шаг 3 — Очистка
 

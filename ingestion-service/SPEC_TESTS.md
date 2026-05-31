@@ -87,6 +87,15 @@ docker-compose.test.yml
 **Фикстура:** `.xlsb` с колонками формата A, дата `Дата и время записи = 45000.5` (≈ 2023-03-17).  
 **Assert:** `sensors['ts_recorded'].iloc[0] > 0`, значение соответствует ожидаемому timestamp.
 
+#### `test_invalid_date_becomes_nan_not_zero`
+**Что:** строка с невалидной датой (`"not a date"`) → `ts_recorded = NaN`, не 0.  
+**Фикстура:** DataFrame формата A с одной строкой, `Дата и время записи = "garbage"`.  
+**Assert:** `sensors['ts_recorded'].isna().all()` (строка останется с NaN, cleaner её удалит).
+
+#### `test_cleaner_drops_row_with_nan_ts_recorded`
+**Что:** cleaner удаляет строки где `ts_recorded = NaN` (в т.ч. от невалидных дат).  
+**Assert:** строка с `ts_recorded=NaN` не попадает в результат `clean_sensors()`.
+
 #### `test_detect_format_a`
 **Что:** файл с колонкой `T пр` → формат A.  
 **Фикстура:** DataFrame с заголовками формата A.  
