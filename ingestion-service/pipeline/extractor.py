@@ -9,8 +9,9 @@ def extract(archive_path: str, out_dir: str) -> list[Path]:
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"unar failed: {result.stderr.strip()}")
+    output = result.stdout + result.stderr
+    if result.returncode != 0 or "Failed!" in output:
+        raise RuntimeError(f"unar failed: {output.strip()}")
 
     xlsx_files = sorted(Path(out_dir).rglob("*.xlsx"))
     return xlsx_files
