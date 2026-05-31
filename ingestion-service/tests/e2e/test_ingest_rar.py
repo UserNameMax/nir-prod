@@ -58,7 +58,9 @@ def test_upload_rar_sensors_in_data_service(ingest_client, data_client, rar_arch
             "/ingest/upload",
             files={"file": ("test.rar", f, "application/octet-stream")},
         )
-    wait_job_done(ingest_client, r.json()["job_id"])
+    job = wait_job_done(ingest_client, r.json()["job_id"])
+    assert job["status"] == "done", f"Job failed: {job.get('error')}"
+    assert job["stats"]["sensors_inserted"] == 8, f"Unexpected stats: {job['stats']}"
 
     health = data_client.get("/health").json()
     assert health["sensors_count"] == 8
