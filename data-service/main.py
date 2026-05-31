@@ -1,4 +1,6 @@
+from __future__ import annotations
 import os
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -24,3 +26,15 @@ def health():
     data_dir = get_data_dir()
     info = reader.read_sensors_health(data_dir)
     return {"status": "ok", **info}
+
+
+@app.delete("/_test/reset", include_in_schema=False)
+def test_reset():
+    """Удаляет parquet-файлы. Только для тестовой среды."""
+    from dependencies import get_data_dir
+    data_dir = get_data_dir()
+    for name in ("sensors.parquet", "objects_meta.parquet"):
+        p = Path(data_dir) / name
+        if p.exists():
+            p.unlink()
+    return {"reset": True}

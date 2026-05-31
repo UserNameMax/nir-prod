@@ -1,0 +1,19 @@
+services:
+  data-service-test:
+    build: ./data-service
+    ports: ["18000:8000"]
+    volumes:
+      - test-data:/app/data
+    environment:
+      DATA_DIR: /app/data
+
+  ingestion-service-test:
+    build: ./ingestion-service
+    ports: ["18001:8001"]
+    environment:
+      DATA_SERVICE_URL: http://data-service-test:8000
+    depends_on:
+      - data-service-test
+
+volumes:
+  test-data:

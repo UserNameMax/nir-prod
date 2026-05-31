@@ -1,0 +1,31 @@
+services:
+  data-service:
+    build: ./data-service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../data:/app/data:rw
+    restart: unless-stopped
+
+  ingestion-service:
+    build: ./ingestion-service
+    ports:
+      - "8001:8001"
+    environment:
+      DATA_SERVICE_URL: http://data-service:8000
+    depends_on:
+      - data-service
+    restart: unless-stopped
+
+  viewer:
+    build:
+      context: ./viewer
+      args:
+        VITE_DATA_API_URL: http://localhost:8000
+        VITE_INGEST_API_URL: http://localhost:8001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - data-service
+      - ingestion-service
+    restart: unless-stopped
