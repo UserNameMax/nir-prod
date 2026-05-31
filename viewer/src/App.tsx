@@ -30,8 +30,9 @@ function Nav() {
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-slate-50">
+      <div className="h-screen flex flex-col bg-slate-50">
         <Nav />
+        <div className="flex-1 min-h-0 overflow-auto">
         <Routes>
           <Route path="/" element={<ObjectList />} />
           <Route path="/calendar" element={<GlobalCalendar />} />
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="/object/:object_id/day/:date" element={<DayView />} />
           <Route path="/ingest" element={<IngestPage />} />
         </Routes>
+        </div>
       </div>
     </BrowserRouter>
   )

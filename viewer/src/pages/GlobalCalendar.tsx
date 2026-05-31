@@ -30,7 +30,6 @@ export function GlobalCalendar() {
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth())
-  // day -> objects_count
   const [summary, setSummary] = useState<Map<string, number>>(new Map())
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
@@ -57,38 +56,51 @@ export function GlobalCalendar() {
   const firstDow = firstDowOfMonth(year, month)
   const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate())
 
+  // Всегда 6 строк × 7 столбцов = 42 ячейки
   const cells: (number | null)[] = [
     ...Array(firstDow).fill(null),
     ...Array.from({ length: totalDays }, (_, i) => i + 1),
+    ...Array(42 - firstDow - totalDays).fill(null),
   ]
 
   const daysWithData = [...summary.values()].filter(n => n > 0).length
 
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-semibold text-slate-800 mb-1">Календарь данных</h1>
-      <p className="text-sm text-slate-400 mb-6">Дни, в которые есть показания хотя бы по одному объекту</p>
-
-      <div className="bg-white rounded-xl border border-slate-200 p-5 select-none">
-        {/* Навигация по месяцам */}
-        <div className="flex items-center justify-between mb-4">
-          <button onClick={prevMonth} className="p-1 rounded hover:bg-slate-100 text-slate-500">←</button>
-          <span className="font-medium text-slate-700">{MONTHS[month]} {year}</span>
-          <button onClick={nextMonth} className="p-1 rounded hover:bg-slate-100 text-slate-500">→</button>
+    <div className="h-full flex flex-col p-4 gap-3 select-none">
+      {/* Заголовок */}
+      <div className="flex items-center justify-between shrink-0">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">Календарь данных</h1>
+          {!loading && (
+            <p className="text-xs text-slate-400 mt-0.5">
+              {daysWithData > 0
+                ? <>Данные за <span className="text-slate-600 font-medium">{daysWithData}</span> {daysWithData === 1 ? 'день' : daysWithData < 5 ? 'дня' : 'дней'} в этом месяце</>
+                : 'В этом месяце данных нет'}
+            </p>
+          )}
         </div>
+        {/* Навигация по месяцам */}
+        <div className="flex items-center gap-3">
+          <button onClick={prevMonth} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white border border-transparent hover:border-slate-200 text-slate-500 transition-colors">←</button>
+          <span className="font-medium text-slate-700 w-36 text-center">{MONTHS[month]} {year}</span>
+          <button onClick={nextMonth} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white border border-transparent hover:border-slate-200 text-slate-500 transition-colors">→</button>
+        </div>
+      </div>
 
+      {/* Карточка календаря */}
+      <div className="flex-1 min-h-0 bg-white rounded-xl border border-slate-200 p-4 flex flex-col gap-1">
         {/* Дни недели */}
-        <div className="grid grid-cols-7 mb-1">
+        <div className="grid grid-cols-7 shrink-0">
           {DOW.map(d => (
             <div key={d} className="text-center text-xs font-medium text-slate-400 py-1">{d}</div>
           ))}
         </div>
 
-        {/* Ячейки */}
+        {/* Сетка дней — flex-1, всегда 6 строк */}
         {loading ? (
-          <div className="h-40 flex items-center justify-center text-slate-400 text-sm">Загрузка...</div>
+          <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">Загрузка...</div>
         ) : (
-          <div className="grid grid-cols-7 gap-0.5">
+          <div className="flex-1 min-h-0 grid grid-cols-7 grid-rows-6 gap-1">
             {cells.map((day, i) => {
               if (day === null) return <div key={`empty-${i}`} />
 
@@ -103,11 +115,11 @@ export function GlobalCalendar() {
                   title={hasData ? `${count} объектов` : undefined}
                   onClick={hasData ? () => navigate(`/calendar/${dateStr}`) : undefined}
                   className={[
-                    'aspect-square flex items-center justify-center rounded-lg text-sm transition-colors',
+                    'flex items-center justify-center rounded-lg text-sm font-medium transition-colors',
                     isToday ? 'ring-2 ring-blue-400 ring-offset-1' : '',
                     hasData
-                      ? 'bg-blue-500 text-white font-medium cursor-pointer hover:bg-blue-600'
-                      : 'text-slate-300 cursor-default',
+                      ? 'bg-blue-500 text-white cursor-pointer hover:bg-blue-600'
+                      : 'text-slate-200 cursor-default',
                   ].join(' ')}
                 >
                   {day}
@@ -117,15 +129,6 @@ export function GlobalCalendar() {
           </div>
         )}
       </div>
-
-      {!loading && (
-        <p className="text-sm text-slate-400 mt-3 text-center">
-          {daysWithData > 0
-            ? <>В этом месяце данные есть за <span className="text-slate-600 font-medium">{daysWithData}</span> {daysWithData === 1 ? 'день' : daysWithData < 5 ? 'дня' : 'дней'}</>
-            : 'В этом месяце данных нет'
-          }
-        </p>
-      )}
     </div>
   )
 }
