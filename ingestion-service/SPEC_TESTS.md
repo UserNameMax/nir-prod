@@ -69,6 +69,11 @@ docker-compose.test.yml
 **Что:** `_clear_dir` удаляет распакованные файлы но не трогает архив.  
 **Assert:** архив на месте, остальные файлы удалены.
 
+#### `test_xlsb_found_by_extractor`
+**Что:** `extract()` на архиве с `.xlsb` файлами возвращает их в списке.  
+**Фикстура:** ZIP с `export.xlsb`.  
+**Assert:** `len(result) == 1`, `result[0].suffix == ".xlsb"`.
+
 #### `test_unar_error_and_unrar_also_fails_raises`
 **Что:** оба инструмента падают → `RuntimeError` содержит вывод обоих.  
 **Assert:** `raises(RuntimeError)`, в сообщении есть `unar failed` и `unrar failed`.
@@ -76,6 +81,11 @@ docker-compose.test.yml
 ---
 
 ### `test_parser.py` — парсинг Excel
+
+#### `test_xlsb_dates_parsed_correctly`
+**Что:** `.xlsb`-файл формата A с числовыми датами (Excel serial) парсится с корректными `ts_recorded`.  
+**Фикстура:** `.xlsb` с колонками формата A, дата `Дата и время записи = 45000.5` (≈ 2023-03-17).  
+**Assert:** `sensors['ts_recorded'].iloc[0] > 0`, значение соответствует ожидаемому timestamp.
 
 #### `test_detect_format_a`
 **Что:** файл с колонкой `T пр` → формат A.  

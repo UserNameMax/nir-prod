@@ -4,6 +4,17 @@ import numpy as np
 import pandas as pd
 
 
+def _to_datetime(series: pd.Series) -> pd.Series:
+    """Parse datetime column regardless of source format.
+
+    - xlsx/xls: already datetime or string → pd.to_datetime
+    - xlsb: float (Excel serial days since 1899-12-30) → convert with unit='D'
+    """
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_datetime(series, unit="D", origin="1899-12-30", errors="coerce")
+    return pd.to_datetime(series, errors="coerce")
+
+
 def detect_format(df: pd.DataFrame) -> str:
     cols = set(df.columns)
     if "t_forward" in cols or "p_forward" in cols:
@@ -41,12 +52,8 @@ def normalize_format_a(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         if col not in df.columns:
             df[col] = np.nan
 
-    df["ts_recorded"] = (
-        pd.to_datetime(df["ts_recorded_dt"], errors="coerce").astype("int64") // 10**9
-    )
-    df["ts_measurement"] = (
-        pd.to_datetime(df["ts_measurement_dt"], errors="coerce").astype("int64") // 10**9
-    )
+    df["ts_recorded"] = _to_datetime(df["ts_recorded_dt"]).astype("int64") // 10**9
+    df["ts_measurement"] = _to_datetime(df["ts_measurement_dt"]).astype("int64") // 10**9
     df["object_id"] = df["object_id"].astype(str)
     df["record_id"] = df["record_id"].astype(str)
 
@@ -72,9 +79,7 @@ def normalize_format_b(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
 
-    df["ts_recorded"] = (
-        pd.to_datetime(df["ts_recorded_dt"], errors="coerce").astype("int64") // 10**9
-    )
+    df["ts_recorded"] = _to_datetime(df["ts_recorded_dt"]).astype("int64") // 10**9
     df["ts_measurement"] = df["ts_recorded"]
     df["object_id"] = df["object_id"].astype(str)
     df["record_id"] = df["record_id"].astype(str)
@@ -95,11 +100,24 @@ def normalize_format_b(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def parse_xlsx(path: Path) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-    """Прочитать xlsx, определить формат, нормализовать. None если формат неизвестен."""
-    raw = pd.read_excel(path)
+    """Прочитать xlsx или xls, определить формат, нормализовать. None если формат неизвестен."""
+    suffix = path.suffix.lower()
+    if suffix == ".xls":
+        engine = "xlrd"
+    elif suffix == ".xlsb":
+        engine = "pyxlsb"
+    else:
+        engine = None
+    try:
+        raw = pd.read_excel(path, engine=engine)
+    except Exception as exc:
+        print(f"[parser] failed to read {path.name}: {exc}", flush=True)
+        return None
     fmt = detect_format(raw)
+    print(f"[parser] {path.name}: format={fmt}, rows={len(raw)}", flush=True)
     if fmt == "A":
         return normalize_format_a(raw)
     if fmt == "B":
         return normalize_format_b(raw)
+    print(f"[parser] {path.name}: UNKNOWN format, columns={list(raw.columns)[:10]}", flush=True)
     return None

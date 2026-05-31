@@ -50,5 +50,10 @@ def extract(archive_path: str, out_dir: str) -> list[Path]:
                 f"unar failed: {output.strip()}\nunrar failed: {output2.strip()}"
             )
 
-    xlsx_files = sorted(Path(out_dir).rglob("*.xlsx"))
-    return xlsx_files
+    all_files = sorted(Path(out_dir).rglob("*"))
+    xls_files = [f for f in all_files if f.suffix.lower() in (".xlsx", ".xls", ".xlsb") and f.is_file()]
+    non_xls = [f.name for f in all_files if f.is_file() and f.suffix.lower() not in (".xlsx", ".xls", ".xlsb", ".rar", ".zip")]
+    print(f"[extractor] found {len(xls_files)} excel files in {out_dir}", flush=True)
+    if non_xls:
+        print(f"[extractor] non-excel files: {non_xls[:10]}", flush=True)
+    return xls_files

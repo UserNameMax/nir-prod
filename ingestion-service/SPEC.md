@@ -1,7 +1,7 @@
 # ingestion-service — Спецификация
 
 **Порт:** 8001  
-**Стек:** FastAPI + Uvicorn, pandas + openpyxl, httpx, unar (системная утилита)
+**Стек:** FastAPI + Uvicorn, pandas + openpyxl + xlrd + pyxlsb, httpx, unar + unrar (системные утилиты)
 
 ## Назначение
 
@@ -72,15 +72,18 @@ class IngestStats(BaseModel):
 
 ## Пайплайн обработки (фоновая задача)
 
-Запускается через `BackgroundTasks` FastAPI после успешного upload.
+Запускается через внутреннюю `asyncio.Queue` — воркер запускается при старте сервиса и обрабатывает задачи последовательно.
 
 ### Шаг 1 — Распаковка
 
 ```bash
-unar -o <tmpdir> <archive>
+unar -o <tmpdir> <archive>          # попытка 1
+unrar x -y <archive> <tmpdir>/      # попытка 2 (fallback)
 ```
 
-`unar` умеет оба формата (RAR и ZIP) без дополнительных флагов. После распаковки — рекурсивный поиск всех `.xlsx` файлов.
+Сначала пробуется `unar` (умеет ZIP и RAR). Если unar вернул ненулевой код или вывел `Failed!` — частично распакованные файлы очищаются и запускается `unrar` как fallback. Такое поведение необходимо из-за бага unar 1.10.x на arm64/Linux (не открывает некоторые RAR5-архивы — BUG-005).
+
+После распаковки — рекурсивный поиск всех Excel-файлов (`.xlsx`, `.xls`, `.xlsb`).
 
 ### Шаг 2 — Парсинг Excel
 
@@ -129,6 +132,12 @@ unar -o <tmpdir> <archive>
 
 Временны́е колонки (`*_dt`) конвертируются в unix seconds (`int64`). В формате B `ts_measurement = ts_recorded`.
 
+**Особенность `.xlsb`:** файлы Excel Binary хранят даты как числа с плавающей точкой (Excel serial — дней с 30.12.1899). Стандартный `pd.to_datetime` трактует их как наносекунды и возвращает 1970-01-01. Применяется специальная конвертация:
+```python
+pd.to_datetime(series, unit="D", origin="1899-12-30", errors="coerce")
+```
+Для `.xlsx`/`.xls` используется обычный `pd.to_datetime`.
+
 ### Шаг 3 — Очистка
 
 Физические границы (значения вне границ → `NaN`):
@@ -149,7 +158,7 @@ BOUNDS = {
 
 ### Шаг 4 — Сохранение через data-service
 
-Батчами по **50 000 строк**:
+Батчами по **500 000 строк**:
 ```
 POST http://data-service:8000/sensors/bulk  → body: SensorRecord[50000]
 POST http://data-service:8000/objects/bulk  → body: ObjectMeta[]

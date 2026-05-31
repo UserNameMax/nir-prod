@@ -20,6 +20,10 @@ BATCH_SIZE = 500_000
 
 app = FastAPI(title="ingestion-service", version="0.1.0")
 
+# Увеличиваем лимит multipart до 2 ГБ (по умолчанию Starlette ставит 1 МБ на поле)
+from starlette.formparsers import MultiPartParser
+MultiPartParser.max_file_size = 2 * 1024 * 1024 * 1024  # 2 GB
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -62,6 +66,8 @@ async def upload(files: list[UploadFile] = File(...)):
         with open(archive_path, "wb") as f:
             while chunk := await file.read(1024 * 1024):  # читаем по 1 МБ
                 f.write(chunk)
+        saved_size = os.path.getsize(archive_path)
+        print(f"[upload] {file.filename}: saved {saved_size:,} bytes", flush=True)
 
         job = jobs.create_job(file.filename)
         await _queue.put((job.job_id, archive_path, tmp_dir))
