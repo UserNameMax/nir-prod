@@ -12,8 +12,8 @@ const CHARTS: Array<{
 }> = [
   { field: 't_supply', label: 'Температура подачи',    unit: '°C',  color: '#ef4444' },
   { field: 't_return', label: 'Температура обратная',  unit: '°C',  color: '#f97316' },
-  { field: 'p_supply', label: 'Давление подачи',       unit: 'бар', color: '#3b82f6' },
-  { field: 'p_return', label: 'Давление обратное',     unit: 'бар', color: '#8b5cf6' },
+  { field: 'p_supply', label: 'Давление подачи',       unit: 'МПа', color: '#3b82f6' },
+  { field: 'p_return', label: 'Давление обратное',     unit: 'МПа', color: '#8b5cf6' },
 ]
 
 function dayToTs(dateStr: string): { from: number; to: number } {
