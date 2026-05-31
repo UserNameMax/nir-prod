@@ -1,6 +1,7 @@
 FROM python:3.12-slim-bookworm
 
-RUN apt-get update && apt-get install -y unar && rm -rf /var/lib/apt/lists/*
+RUN echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list \
+ && apt-get update && apt-get install -y unar unrar && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
