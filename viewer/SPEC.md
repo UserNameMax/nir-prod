@@ -14,9 +14,12 @@ React SPA для работы с данными тепловых сетей. П�
 | Путь | Страница | Описание |
 |------|----------|----------|
 | `/` | `ObjectList` | Список объектов с поиском и фильтрами |
-| `/object/:object_id` | `ObjectCalendar` | Календарь дней с данными для объекта |
-| `/object/:object_id/:date` | `DayView` | Графики датчиков за выбранный день |
+| `/calendar` | `GlobalCalendar` | Глобальный календарь — дни с данными по всем объектам |
+| `/object/:object_id` | `ObjectCalendar` | Календарь дней с данными для конкретного объекта |
+| `/object/:object_id/day/:date` | `DayView` | Графики датчиков за выбранный день |
 | `/ingest` | `IngestPage` | Загрузка архивов и история задач |
+
+**Навигация (Nav):** три вкладки — `Объекты`, `Календарь`, `Загрузка данных`.
 
 nginx настроен с `try_files $uri /index.html` для корректной работы SPA-роутинга.
 
@@ -53,6 +56,18 @@ nginx настроен с `try_files $uri /index.html` для корректно
 
 Навигация по дням: `←` / `→` переключают между датами, в которых есть данные (берётся из календаря объекта). NaN-значения в графиках отображаются как разрывы (`connectNulls={false}`).
 
+### `GlobalCalendar`
+
+Глобальный месячный календарь по всем объектам.
+
+**Источник данных:** `GET /sensors/calendar/summary?from_date=...&to_date=...` → `[{"day": "2025-10-01", "objects_count": 420}, ...]`.
+
+**Цвет дней:** синий — `objects_count > 0`, серый — нет данных.
+
+**Переход:** клик по синему дню — переходим на `/?date=YYYY-MM-DD` (фильтрует список объектов по дню — **TODO**, пока не реализовано) или просто отображает количество объектов за день в тултипе. Поведение уточнить при реализации.
+
+**Навигация по месяцам:** кнопки `←` / `→`, запрашиваем только видимый диапазон дат.
+
 ### `IngestPage`
 
 Drag-and-drop загрузка RAR/ZIP архива. После загрузки — прогресс-бар с обновлением каждые 2 секунды (polling `GET /ingest/jobs/{id}`).
@@ -83,7 +98,7 @@ Recharts `LineChart` с `connectNulls={false}`. Ось X — время (`ts_rec
 
 | Файл | Сервис | Методы |
 |------|--------|--------|
-| `api/dataService.ts` | data-service | `getObjects`, `getObject`, `getCalendar`, `getSensors` |
+| `api/dataService.ts` | data-service | `getObjects`, `getObject`, `getCalendar`, `getCalendarSummary`, `getSensors` |
 | `api/ingestService.ts` | ingestion-service | `upload`, `getJob`, `listJobs` |
 
 URL сервисов берётся из env-переменных Vite:
