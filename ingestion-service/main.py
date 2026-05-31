@@ -16,7 +16,7 @@ from jobs import IngestJob, IngestStats
 from pipeline import extractor, parser, cleaner
 
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data-service:8000")
-BATCH_SIZE = 50_000
+BATCH_SIZE = 500_000
 
 app = FastAPI(title="ingestion-service", version="0.1.0")
 
