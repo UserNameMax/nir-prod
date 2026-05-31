@@ -4,6 +4,12 @@ import numpy as np
 import pandas as pd
 
 
+def _clean_str(series: pd.Series) -> pd.Series:
+    """Привести к str, убрать пробелы, NaN/None → pd.NA."""
+    s = series.astype(str).str.strip()
+    return s.where(~s.isin(["nan", "None", "NaN", ""]), other=pd.NA)
+
+
 def _to_datetime(series: pd.Series) -> pd.Series:
     """Parse datetime column regardless of source format.
 
@@ -13,7 +19,9 @@ def _to_datetime(series: pd.Series) -> pd.Series:
     # Проверяем первый непустой элемент: если float — xlsb serial date
     sample = series.dropna().iloc[0] if not series.dropna().empty else None
     if isinstance(sample, float):
-        return pd.to_datetime(series, unit="D", origin="1899-12-30", errors="coerce")
+        # xlsb хранит даты как float в object-Series; pandas 2.x требует numeric dtype
+        numeric = pd.to_numeric(series, errors="coerce")
+        return pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
     return pd.to_datetime(series, errors="coerce")
 
 
@@ -50,7 +58,7 @@ def normalize_format_a(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         "P обр":                    "p_return",
         "Дата и время записи":      "ts_recorded_dt",
         "ID объекта":               "object_id",
-        "Тип ��бъекта":              "object_type",
+        "Тип объекта":              "object_type",
         "Котельная/ЦТП":            "facility_type",
         "Наименование котельной":   "facility_name",
         "Муниципалитет":            "municipality",
@@ -64,8 +72,8 @@ def normalize_format_a(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     df["ts_recorded"] = _to_unix(df["ts_recorded_dt"])
     df["ts_measurement"] = _to_unix(df["ts_measurement_dt"])
-    df["object_id"] = df["object_id"].astype(str)
-    df["record_id"] = df["record_id"].astype(str)
+    df["object_id"] = _clean_str(df["object_id"])
+    df["record_id"] = _clean_str(df["record_id"])
     for col in ("t_supply", "t_return", "p_supply", "p_return"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -93,8 +101,8 @@ def normalize_format_b(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     df["ts_recorded"] = _to_unix(df["ts_recorded_dt"])
     df["ts_measurement"] = df["ts_recorded"]
-    df["object_id"] = df["object_id"].astype(str)
-    df["record_id"] = df["record_id"].astype(str)
+    df["object_id"] = _clean_str(df["object_id"])
+    df["record_id"] = _clean_str(df["record_id"])
     for col in ("t_supply", "t_return", "p_supply", "p_return"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df["object_type"] = np.nan

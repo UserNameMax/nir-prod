@@ -17,7 +17,9 @@
 2. `parser.py`: добавлена `_to_datetime(series)` — при числовом типе применяет `unit='D', origin='1899-12-30'`
 3. Строки с `ts_recorded < 86400` удалены из parquet через DuckDB точечно (без пересоздания всей базы)
 
-**Тест:** добавить `test_parser.py::test_xlsb_dates_parsed_correctly` — читать `.xlsb`-фикстуру, проверять что `ts_recorded` не равен 0.
+**Тест:** `test_parser.py::test_xlsb_serial_float_dates_parsed_correctly`, `test_ingest_rar.py::test_upload_xlsb_in_rar_correct_dates`.
+
+**Подбаг BUG-008b:** pandas 2.x требует numeric dtype при `pd.to_datetime(series, unit="D")`. С `dtype=object` серия содержит float-значения в object-обёртке — pandas кидает `"series is not compatible with origin; it must be numeric"`. Фикс: `pd.to_numeric(series, errors="coerce")` перед `pd.to_datetime`.
 
 ---
 
@@ -34,7 +36,40 @@
 2. `period_from/to` в `main.py` фильтрует `ts_recorded > 0` перед `min/max`.
 3. 130k строк с ts~0 удалены из parquet точечным DuckDB-скриптом.
 
-**Тест:** `test_cleaner.py::test_drop_row_invalid_ts_recorded_zero` — строка с `ts_recorded=0` должна удаляться.
+**Тест:** `test_cleaner.py::test_drop_row_ts_recorded_nan_from_invalid_date`, `test_parser.py::test_invalid_date_string_becomes_nan`.
+
+---
+
+## BUG-010 — `"Тип ��бъекта"` — битый символ в rename dict → все object_type NULL
+
+**Обнаружен:** сравнение OLD vs NEW parquet  
+**Сервис:** ingestion-service  
+**Файл:** `pipeline/parser.py`
+
+**Причина:** в rename dict для формата A ключ `"Тип объекта"` содержал битый символ (replacement character). Rename не срабатывал → ветка `if col not in df.columns: df[col] = np.nan` заполняла весь столбец NaN. В NEW parquet: `null object_type: 4,559 (все!)` vs OLD: `null: 10`.
+
+**Фикс:** исправлен ключ на корректный `"Тип объекта"`.
+
+**Тест:** `test_parser.py::test_object_type_column_populated`, `test_ingest_zip.py::test_object_type_not_null_after_ingest`.
+
+---
+
+## BUG-011 — `astype(str)` на NaN давал строку `"nan"` вместо null
+
+**Обнаружен:** сравнение OLD vs NEW parquet + 422 на /objects/bulk  
+**Сервис:** ingestion-service  
+**Файл:** `pipeline/parser.py`, `main.py`
+
+**Причина:** `df["object_id"].astype(str)` превращал пустые ячейки Excel (NaN) в строку `"nan"`. Это приводило к двум проблемам:
+1. В базу записывался объект с `object_id="nan"` — мусорная запись
+2. После замены на `_clean_str` (`pd.NA`): `meta.to_dict()` давал `{"object_id": None}` → Pydantic 422 (поле обязательное)
+
+**Фикс:**
+1. `_clean_str(series)`: `astype(str).str.strip()` + замена `"nan"/"None"/""` → `pd.NA`
+2. `main.py`: `meta.dropna(subset=["object_id"])` перед отправкой на `/objects/bulk`
+3. Cleaner корректно удаляет строки с `pd.NA` в `object_id` через `dropna`
+
+**Тест:** `test_parser.py::test_object_id_nan_becomes_pd_na`, `test_meta_payload.py::test_null_object_id_filtered_before_bulk`.
 
 ---
 

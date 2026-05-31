@@ -30,6 +30,8 @@ GET  /ingest/jobs
 
 Каждый загруженный архив создаёт задачу со статусом `queued`. Воркер (asyncio task, запускается при старте сервиса) берёт задачи по одной и обрабатывает последовательно. Параллельная обработка не поддерживается — предотвращает гонки при записи parquet.
 
+Загрузка файла: чанками по 1 МБ (`while chunk := await file.read(1MB)`) — предотвращает обрезание при файлах >400 МБ (BUG-007).
+
 ---
 
 ## Схемы (Pydantic)
@@ -53,12 +55,12 @@ class IngestJob(BaseModel):
     merge_processed: int | None   # вставлено строк на данный момент
 
 class IngestStats(BaseModel):
-    xlsx_files_found: int
+    xlsx_files_found: int         # кол-во найденных Excel-файлов (.xlsx/.xls/.xlsb)
     sensors_inserted: int
-    sensors_duplicates: int
+    sensors_duplicates: int       # строки пропущенные при дедупликации по record_id
     objects_upserted: int
-    period_from: datetime
-    period_to: datetime
+    period_from: datetime | None  # min(ts_recorded) среди вставленных строк
+    period_to: datetime | None    # max(ts_recorded) среди вставленных строк
     objects_count: int
 ```
 
@@ -81,17 +83,26 @@ unar -o <tmpdir> <archive>          # попытка 1
 unrar x -y <archive> <tmpdir>/      # попытка 2 (fallback)
 ```
 
-Сначала пробуется `unar` (умеет ZIP и RAR). Если unar вернул ненулевой код или вывел `Failed!` — частично распакованные файлы очищаются и запускается `unrar` как fallback. Такое поведение необходимо из-за бага unar 1.10.x на arm64/Linux (не открывает некоторые RAR5-архивы — BUG-005).
+Сначала пробуется `unar` (умеет ZIP и RAR). Если unar вернул ненулевой код или вывел `Failed!` в stdout — частично распакованные файлы очищаются (`_clear_dir`, keep={archive}) и запускается `unrar` как fallback. Такое поведение необходимо из-за бага unar 1.10.x на arm64/Linux (BUG-005, BUG-006).
 
 После распаковки — рекурсивный поиск всех Excel-файлов (`.xlsx`, `.xls`, `.xlsb`).
 
 ### Шаг 2 — Парсинг Excel
 
-Определение формата по заголовкам первой строки:
+Все файлы читаются с `dtype=object` — предотвращает `OutOfBoundsDatetime` при `pd.read_excel` на строках с очень старыми/некорректными датами (BUG-008).
+
+Движок по расширению:
+| Расширение | Движок |
+|-----------|--------|
+| `.xlsx` | openpyxl (default) |
+| `.xls` | xlrd |
+| `.xlsb` | pyxlsb |
+
+Определение формата по заголовкам:
 
 | Формат | Признак | Колонка объекта |
 |--------|---------|----------------|
-| **A** | `T пр` или `ID объекта` | `Наименование котельной` или `Наименование объекта` (оба варианта) |
+| **A** | `T пр` или `ID объекта` | `Наименование котельной` или `Наименование объекта` |
 | **B** | `t_forward` | `name_koteln` |
 
 Маппинг колонок в единую схему:
@@ -130,16 +141,25 @@ unrar x -y <archive> <tmpdir>/      # попытка 2 (fallback)
 # object_type и facility_type отсутствуют → NaN
 ```
 
-Временны́е колонки (`*_dt`) конвертируются в unix seconds (`int64`). В формате B `ts_measurement = ts_recorded`.
+**Конвертация дат — `_to_datetime(series)`:**
 
-**Особенности формата `.xlsb`:**
-- Файлы Excel Binary хранят даты как float (Excel serial — дней с 30.12.1899). Стандартный `pd.to_datetime` трактует их как наносекунды → 1970-01-01. Применяется конвертация `unit="D", origin="1899-12-30"`.
-- Для `.xlsx`/`.xls` используется обычный `pd.to_datetime`.
+С `dtype=object` даты приходят как Python datetime-объекты (xlsx/xls) или float (xlsb).
+- Если первый непустой элемент — `float`: xlsb serial date → `pd.to_numeric(series)` → `pd.to_datetime(unit="D", origin="1899-12-30")`
+  - Предварительный `pd.to_numeric` обязателен: pandas 2.x требует numeric dtype, а не object с float-значениями (BUG-008)
+- Иначе: `pd.to_datetime(series, errors="coerce")`
 
-**Конвертация временны́х меток:**
-Все файлы читаются с `dtype=object` (предотвращает падение при out-of-bounds датах во время `read_excel`). Конвертация выполняется функцией `_to_unix(series) → float64`:
-- NaT (невалидные даты) → `NaN` (не 0!), такие строки удаляются cleaner-ом как missing required field
-- Числовые колонки (`t_supply`, `p_supply` и т.д.) явно приводятся через `pd.to_numeric(errors="coerce")`
+**`_to_unix(series) → float64`:**
+- Вызывает `_to_datetime`, затем `.astype("int64") // 10**9`
+- NaT → `NaN` через `.where(dt.notna())` — не 0! (BUG-009)
+- Строки с NaN в `ts_recorded` удаляются cleaner-ом
+
+**`_clean_str(series) → StringDtype`:**
+- `astype(str).str.strip()` — убирает пробелы
+- `"nan"`, `"None"`, `""` → `pd.NA` — не попадают в базу как мусорные строки
+
+После cleaner явный каст: `ts_recorded/ts_measurement → int64`, `t_supply/... → float64`.
+
+**Числовые колонки** (`t_supply`, `t_return`, `p_supply`, `p_return`) — `pd.to_numeric(errors="coerce")` т.к. при `dtype=object` приходят как строки/объекты.
 
 ### Шаг 3 — Очистка
 
@@ -154,21 +174,25 @@ BOUNDS = {
 ```
 
 Удаление строк:
-- NaN в `record_id`, `object_id`, `ts_recorded`
+- `NaN` в `record_id`, `object_id`, `ts_recorded` (включая строки с пустым `object_id` из итоговых строк Excel)
 - Все 4 датчика одновременно NaN
 
-Дедупликация по `record_id` внутри текущей выгрузки (один архив мог содержать перекрывающиеся файлы).
+Дедупликация по `record_id` внутри текущей выгрузки.
 
 ### Шаг 4 — Сохранение через data-service
 
 Батчами по **500 000 строк**:
 ```
-POST http://data-service:8000/sensors/bulk  → body: SensorRecord[50000]
+POST http://data-service:8000/sensors/bulk  → body: SensorRecord[500000]
 POST http://data-service:8000/objects/bulk  → body: ObjectMeta[]
 ```
+
+Перед отправкой objects: `meta.dropna(subset=["object_id"])` — строки с пустым object_id не отправляются (Pydantic требует `str`, не `None` — BUG-009).
+
+`period_from/to` вычисляется как `min/max(ts_recorded)` среди строк с `ts_recorded > 0`.
 
 URL data-service берётся из env `DATA_SERVICE_URL` (default: `http://data-service:8000`).
 
 ### Шаг 5 — Очистка
 
-Удалить tmp-директорию с распакованными файлами и загруженным архивом.
+Удалить tmp-директорию с распакованными файлами и загруженным архивом (`shutil.rmtree`).

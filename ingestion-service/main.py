@@ -95,6 +95,9 @@ def _run_pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
     try:
         _pipeline(job_id, archive_path, tmp_dir)
     except Exception as exc:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[pipeline] ERROR in {job_id}: {exc}\n{tb}", flush=True)
         jobs.update_job(job_id, status="error", error=str(exc), finished_at=datetime.utcnow())
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -121,6 +124,9 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
         sensors_df, meta_df = result
         sensors_df = cleaner.clean_sensors(sensors_df)
         sensors_df = cleaner.dedup_sensors(sensors_df)
+        # ts-колонки из parser — float64 (NaN→NaT safe), кастим в int64 после cleaner
+        sensors_df["ts_recorded"] = sensors_df["ts_recorded"].astype("int64")
+        sensors_df["ts_measurement"] = sensors_df["ts_measurement"].fillna(sensors_df["ts_recorded"]).astype("int64")
         meta_df = cleaner.dedup_meta(meta_df)
 
         all_sensors.append(sensors_df)
@@ -176,8 +182,9 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
             total_skipped += data["skipped_duplicates"]
             jobs.update_job(job_id, merge_processed=min(start + BATCH_SIZE, merge_total))
 
-        # Objects
-        meta_records = meta.astype(object).where(meta.notna(), other=None).to_dict(orient="records")
+        # Objects — убираем строки без object_id (pd.NA после _clean_str)
+        meta_clean = meta.dropna(subset=["object_id"])
+        meta_records = meta_clean.astype(object).where(meta_clean.notna(), other=None).to_dict(orient="records")
         resp = client.post("/objects/bulk", json=meta_records)
         resp.raise_for_status()
         objects_upserted = resp.json()["inserted"]
