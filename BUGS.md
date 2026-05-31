@@ -2,6 +2,48 @@
 
 ---
 
+## BUG-005 — unar на arm64/Linux не может распаковать некоторые RAR5
+
+**Обнаружен:** прод (реальные данные)  
+**Сервис:** ingestion-service  
+**Файл:** `pipeline/extractor.py`
+
+**Причина:** unar 1.10.x на Debian arm64 падает с `Attempted to read more data than was available` на RAR5-архивах с определённым методом сжатия. Та же версия на macOS открывает их без ошибок.
+
+**Фикс:** добавлен fallback на `unrar` (non-free): сначала пробуем unar, при `Failed!` в выводе — чистим частично распакованные файлы и запускаем unrar.
+
+**Тест:** нужен unit-тест `test_extractor.py::test_fallback_to_unrar_on_unar_failure` — мокируем unar как падающий, проверяем что вызывается unrar.
+
+---
+
+## BUG-006 — Частичная распаковка unar + fallback unrar давала дубликаты xlsx
+
+**Обнаружен:** прод (реальные данные)  
+**Сервис:** ingestion-service  
+**Файл:** `pipeline/extractor.py`
+
+**Причина:** unar распаковывает N-1 файлов в `out_dir/archive_name/`, потом unrar распаковывает все N в `out_dir/`. `rglob("*.xlsx")` находит (N-1) + N файлов → дубли, двойная обработка данных.
+
+**Фикс:** перед запуском unrar очищаем `out_dir` кроме самого архива (`_clear_dir(out_dir, keep={Path(archive_path)})`).
+
+**Тест:** нужен unit-тест `test_extractor.py::test_no_duplicate_xlsx_after_fallback`.
+
+---
+
+## BUG-007 — Архив обрезается при загрузке через браузер (>400 МБ)
+
+**Обнаружен:** прод (реальные данные)  
+**Сервис:** ingestion-service  
+**Файл:** `main.py`
+
+**Причина:** `await file.read()` читал весь файл одним куском — при больших файлах браузер обрывал соединение до завершения. Файл сохранялся обрезанным, unar падал на последнем xlsx.
+
+**Фикс:** заменено на чтение по 1 МБ чанкам: `while chunk := await file.read(1024 * 1024)`. Добавлен `--timeout-keep-alive 300` в uvicorn.
+
+**Тест:** нужен e2e-тест `test_ingest_zip.py::test_large_archive_upload_complete` — проверять что `os.path.getsize` совпадает с `Content-Length`.
+
+---
+
 ## BUG-004 — record_id и object_id хранятся как int64 → 500 при GET /sensors
 
 **Обнаружен:** прод (реальные данные)  

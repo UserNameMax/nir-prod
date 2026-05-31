@@ -53,6 +53,28 @@ docker-compose.test.yml
 
 ## Unit-тесты
 
+### `test_extractor.py` — распаковка архивов (BUG-005, BUG-006, BUG-007)
+
+#### `test_fallback_to_unrar_on_unar_failure`
+**Что:** если unar возвращает `Failed!` в stdout — вызывается unrar как fallback.  
+**Фикстура:** мокируем `_try_unar` → возвращает `(False, "Failed!")`, мокируем `_try_unrar` → возвращает `(True, "All OK")`.  
+**Assert:** `_try_unrar` был вызван; xlsx-файлы найдены.
+
+#### `test_no_duplicate_xlsx_after_fallback`
+**Что:** после fallback unar→unrar в out_dir нет дублей xlsx.  
+**Фикстура:** создаём `out_dir` с несколькими xlsx (имитируем частичную распаковку unar), потом вызываем `_clear_dir(out_dir, keep={archive_path})`.  
+**Assert:** после очистки в out_dir только архив, xlsx удалены.
+
+#### `test_clear_dir_keeps_archive`
+**Что:** `_clear_dir` удаляет распакованные файлы но не трогает архив.  
+**Assert:** архив на месте, остальные файлы удалены.
+
+#### `test_unar_error_and_unrar_also_fails_raises`
+**Что:** оба инструмента падают → `RuntimeError` содержит вывод обоих.  
+**Assert:** `raises(RuntimeError)`, в сообщении есть `unar failed` и `unrar failed`.
+
+---
+
 ### `test_parser.py` — парсинг Excel
 
 #### `test_detect_format_a`
@@ -147,6 +169,21 @@ docker-compose.test.yml
 #### `test_upload_rar_sensors_in_data_service`
 **Что:** после успешной задачи данные доступны через data-service.  
 **Assert:** `job["stats"]["sensors_inserted"] == 8`, данные видны через `GET /sensors`.
+
+---
+
+### `test_ingest_upload.py` — загрузка файлов (BUG-007)
+
+#### `test_upload_file_size_matches_original`
+**Что:** размер сохранённого архива совпадает с оригиналом.  
+**Фикстура:** ZIP-архив известного размера.  
+**Шаги:** POST `/ingest/upload`, считать байты сохранённого файла через логи или доп. эндпоинт.  
+**Assert:** `saved_bytes == original_bytes`.
+
+#### `test_upload_multiple_files_queued`
+**Что:** загрузка нескольких файлов одним запросом — все получают статус `queued`.  
+**Фикстура:** два ZIP-архива.  
+**Assert:** ответ содержит 2 job_id, оба `status == "queued"`, обрабатываются последовательно.
 
 ---
 
