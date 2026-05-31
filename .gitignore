@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+.env.local
+
+# Data (parquet файлы — не коммитим, они bind-mount)
+data/
+*.parquet
+*.tmp.parquet
+
+# Архивы выгрузок
+*.rar
+*.zip
+
+# OS
+.DS_Store
+
+# Docker
+*.log
