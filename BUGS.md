@@ -2,6 +2,20 @@
 
 ---
 
+## BUG-004 — record_id и object_id хранятся как int64 → 500 при GET /sensors
+
+**Обнаружен:** прод (реальные данные)  
+**Сервис:** data-service  
+**Файл:** `storage/reader.py`
+
+**Причина:** `sensors.parquet` из реальной выгрузки хранит `record_id` и `object_id` как `int64`. Pydantic-схема `SensorRecord` ожидает `str` — валидация ответа падала с `Input should be a valid string`.
+
+**Фикс:** после чтения через DuckDB явно кастим `rows["record_id"].astype(str)` и `rows["object_id"].astype(str)` в `read_sensors` перед возвратом.
+
+**Тест:** покрывается существующим `test_read_sensors_with_nan_sensor_values` (добавить вариант с int-колонками при следующем обновлении тестов).
+
+---
+
 ## BUG-001 — NaN в meta payload вызывал 500 при POST /objects/bulk
 
 **Обнаружен:** e2e тесты  
