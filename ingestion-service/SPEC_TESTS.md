@@ -16,18 +16,22 @@ E2E тесты поднимают **изолированный стек** — da
 
 ```
 tests/
-├── conftest.py              фикстуры: тестовые parquet, клиенты, docker-сервисы
 ├── fixtures/
 │   ├── make_xlsx.py         генераторы тестовых xlsx (форматы A и B)
 │   ├── sample_format_a.xlsx маленький эталонный файл формата A (10 строк)
 │   └── sample_format_b.xlsx маленький эталонный файл формата B (10 строк)
 ├── unit/
 │   ├── test_parser.py
-│   └── test_cleaner.py
+│   ├── test_cleaner.py
+│   └── test_meta_payload.py  тесты BUG-001
 └── e2e/
+    ├── conftest.py           session-фикстура services + autouse clean_data
+    ├── helpers.py            wait_job_done(client, job_id, timeout)
     ├── test_ingest_zip.py
     └── test_ingest_rar.py
 ```
+
+> `conftest.py` намеренно лежит в `tests/e2e/` (не в `tests/`), чтобы `autouse`-фикстура `clean_data` не применялась к unit-тестам.
 
 ### Изоляция данных
 
@@ -137,8 +141,12 @@ docker-compose.test.yml
 ### `test_ingest_rar.py`
 
 #### `test_upload_rar_completes`
-**Что:** то же что `test_job_completes` но с RAR-архивом.  
+**Что:** RAR-архив с xlsx формата A → задача переходит в `done`.  
 **Assert:** `status == "done"`.
+
+#### `test_upload_rar_sensors_in_data_service`
+**Что:** после успешной задачи данные доступны через data-service.  
+**Assert:** `job["stats"]["sensors_inserted"] == 8`, данные видны через `GET /sensors`.
 
 ---
 
