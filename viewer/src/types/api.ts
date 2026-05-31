@@ -38,7 +38,7 @@ export interface IngestStats {
 export interface IngestJob {
   job_id: string
   filename: string
-  status: 'processing' | 'done' | 'error'
+  status: 'queued' | 'processing' | 'done' | 'error'
   created_at: string
   finished_at: string | null
   stats: IngestStats | null
@@ -47,4 +47,6 @@ export interface IngestJob {
   files_processed: number | null
   current_file: string | null
   rows_processed: number | null
+  merge_total: number | null
+  merge_processed: number | null
 }

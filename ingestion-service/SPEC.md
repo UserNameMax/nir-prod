@@ -5,7 +5,7 @@
 
 ## Назначение
 
-Принять архив с выгрузкой датчиков (RAR или ZIP), распарсить Excel-файлы, сохранить данные через data-service. Разметка событий — вне скопа.
+Принять один или несколько архивов с выгрузкой датчиков (RAR или ZIP), распарсить Excel-файлы, сохранить данные через data-service. Архивы обрабатываются последовательно через внутреннюю asyncio-очередь. Разметка событий — вне скопа.
 
 ---
 
@@ -14,8 +14,8 @@
 ```
 POST /ingest/upload
      Content-Type: multipart/form-data
-     file: <.rar | .zip>
-     → {"job_id": "uuid", "status": "processing"}
+     files: <.rar | .zip>[]    один или несколько архивов
+     → [{"job_id": "uuid", "status": "queued"}, ...]
 
 GET  /ingest/jobs/{job_id}
      → IngestJob
@@ -26,22 +26,31 @@ GET  /ingest/jobs
 
 ---
 
+## Очередь обработки
+
+Каждый загруженный архив создаёт задачу со статусом `queued`. Воркер (asyncio task, запускается при старте сервиса) берёт задачи по одной и обрабатывает последовательно. Параллельная обработка не поддерживается — предотвращает гонки при записи parquet.
+
+---
+
 ## Схемы (Pydantic)
 
 ```python
 class IngestJob(BaseModel):
     job_id: str
     filename: str
-    status: Literal["processing", "done", "error"]
+    status: Literal["queued", "processing", "done", "error"]
     created_at: datetime
     finished_at: datetime | None
     stats: IngestStats | None
     error: str | None
-    # прогресс (заполняется во время processing)
+    # прогресс парсинга (фаза 1)
     files_total: int | None
     files_processed: int | None
     current_file: str | None      # имя текущего обрабатываемого файла
     rows_processed: int | None
+    # прогресс мерджа (фаза 2 — сохранение в data-service)
+    merge_total: int | None       # общее кол-во строк для вставки
+    merge_processed: int | None   # вставлено строк на данный момент
 
 class IngestStats(BaseModel):
     xlsx_files_found: int

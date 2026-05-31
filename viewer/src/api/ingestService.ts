@@ -3,9 +3,9 @@ import type { IngestJob } from '../types/api'
 const BASE = import.meta.env.VITE_INGEST_API_URL ?? 'http://localhost:8001'
 
 export const ingestService = {
-  async upload(file: File): Promise<{ job_id: string; status: string }> {
+  async upload(files: File[]): Promise<Array<{ job_id: string; status: string }>> {
     const form = new FormData()
-    form.append('file', file)
+    for (const file of files) form.append('files', file)
     const res = await fetch(`${BASE}/ingest/upload`, { method: 'POST', body: form })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))

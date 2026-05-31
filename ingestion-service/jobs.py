@@ -1,3 +1,4 @@
+from __future__ import annotations
 import uuid
 from collections import OrderedDict
 from datetime import datetime
@@ -20,18 +21,21 @@ class IngestStats(BaseModel):
 class IngestJob(BaseModel):
     job_id: str
     filename: str
-    status: Literal["processing", "done", "error"]
+    status: Literal["queued", "processing", "done", "error"]
     created_at: datetime
     finished_at: datetime | None = None
     stats: IngestStats | None = None
     error: str | None = None
+    # прогресс парсинга
     files_total: int | None = None
     files_processed: int | None = None
     current_file: str | None = None
     rows_processed: int | None = None
+    # прогресс мерджа
+    merge_total: int | None = None
+    merge_processed: int | None = None
 
 
-# OrderedDict сохраняет порядок вставки — легко обрезать старые записи
 _store: OrderedDict[str, IngestJob] = OrderedDict()
 
 
@@ -39,7 +43,7 @@ def create_job(filename: str) -> IngestJob:
     job = IngestJob(
         job_id=str(uuid.uuid4()),
         filename=filename,
-        status="processing",
+        status="queued",
         created_at=datetime.utcnow(),
     )
     _store[job.job_id] = job
@@ -60,5 +64,4 @@ def update_job(job_id: str, **kwargs) -> None:
     job = _store.get(job_id)
     if job is None:
         return
-    updated = job.model_copy(update=kwargs)
-    _store[job_id] = updated
+    _store[job_id] = job.model_copy(update=kwargs)

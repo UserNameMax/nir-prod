@@ -1,3 +1,5 @@
+from __future__ import annotations
+import asyncio
 import os
 import shutil
 import tempfile
@@ -6,7 +8,7 @@ from pathlib import Path
 
 import httpx
 import pandas as pd
-from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 import jobs
@@ -25,23 +27,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Очередь задач — обрабатываются по одной
+_queue: asyncio.Queue = asyncio.Queue()
+
+
+@app.on_event("startup")
+async def start_worker() -> None:
+    asyncio.create_task(_worker())
+
+
+async def _worker() -> None:
+    while True:
+        job_id, archive_path, tmp_dir = await _queue.get()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _run_pipeline, job_id, archive_path, tmp_dir)
+        _queue.task_done()
+
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post("/ingest/upload")
-async def upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    suffix = Path(file.filename).suffix.lower()
-    if suffix not in (".rar", ".zip"):
-        raise HTTPException(status_code=400, detail="Only .rar and .zip archives are supported")
+async def upload(files: list[UploadFile] = File(...)):
+    created = []
+    for file in files:
+        suffix = Path(file.filename).suffix.lower()
+        if suffix not in (".rar", ".zip"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{file.filename}: только .rar и .zip архивы поддерживаются",
+            )
 
-    tmp_dir = tempfile.mkdtemp()
-    archive_path = str(Path(tmp_dir) / file.filename)
-    with open(archive_path, "wb") as f:
-        f.write(await file.read())
+        tmp_dir = tempfile.mkdtemp()
+        archive_path = str(Path(tmp_dir) / file.filename)
+        with open(archive_path, "wb") as f:
+            f.write(await file.read())
 
-    job = jobs.create_job(file.filename)
-    background_tasks.add_task(_run_pipeline, job.job_id, archive_path, tmp_dir)
-    return {"job_id": job.job_id, "status": job.status}
+        job = jobs.create_job(file.filename)
+        await _queue.put((job.job_id, archive_path, tmp_dir))
+        created.append({"job_id": job.job_id, "status": job.status})
+
+    return created
 
 
 @app.get("/ingest/jobs/{job_id}", response_model=IngestJob)
@@ -69,6 +94,8 @@ def _run_pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
 
 
 def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
+    jobs.update_job(job_id, status="processing")
+
     # Шаг 1 — распаковка
     xlsx_files = extractor.extract(archive_path, tmp_dir)
     jobs.update_job(job_id, files_total=len(xlsx_files), files_processed=0, rows_processed=0)
@@ -100,6 +127,7 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
             job_id,
             status="done",
             finished_at=datetime.utcnow(),
+            current_file=None,
             stats=IngestStats(
                 xlsx_files_found=len(xlsx_files),
                 sensors_inserted=0,
@@ -120,19 +148,28 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
     # Шаг 4 — сохранение через data-service
     total_inserted = 0
     total_skipped = 0
+    merge_total = len(sensors)
+
+    jobs.update_job(
+        job_id,
+        current_file=None,
+        merge_total=merge_total,
+        merge_processed=0,
+    )
 
     with httpx.Client(base_url=DATA_SERVICE_URL, timeout=120) as client:
-        # Sensors батчами
-        for start in range(0, len(sensors), BATCH_SIZE):
-            batch = sensors.iloc[start : start + BATCH_SIZE]
+        # Sensors батчами — обновляем прогресс мерджа после каждого батча
+        for start in range(0, merge_total, BATCH_SIZE):
+            batch = sensors.iloc[start: start + BATCH_SIZE]
             records = _sensors_to_payload(batch)
             resp = client.post("/sensors/bulk", json=records)
             resp.raise_for_status()
             data = resp.json()
             total_inserted += data["inserted"]
             total_skipped += data["skipped_duplicates"]
+            jobs.update_job(job_id, merge_processed=min(start + BATCH_SIZE, merge_total))
 
-        # Objects — astype(object) чтобы NaN не конвертировался обратно из None
+        # Objects
         meta_records = meta.astype(object).where(meta.notna(), other=None).to_dict(orient="records")
         resp = client.post("/objects/bulk", json=meta_records)
         resp.raise_for_status()
@@ -143,7 +180,7 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
         job_id,
         status="done",
         finished_at=datetime.utcnow(),
-        current_file=None,
+        merge_processed=merge_total,
         stats=IngestStats(
             xlsx_files_found=len(xlsx_files),
             sensors_inserted=total_inserted,
@@ -159,7 +196,6 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
 def _sensors_to_payload(df: pd.DataFrame) -> list[dict]:
     df = df.where(df.notna(), other=None)
     records = df.to_dict(orient="records")
-    # ts_measurement и ts_recorded должны быть int, не float/None
     for r in records:
         for col in ("ts_measurement", "ts_recorded"):
             if r.get(col) is not None:
