@@ -267,6 +267,20 @@ tests/
 **Что:** архив B содержит 5 строк из A и 5 новых → вставляется ровно 5.  
 **Assert:** `sensors_inserted == 5`, `sensors_duplicates == 5`.
 
+#### `test_mkd_columns_fixed`
+**Что:** МКД-объекты у которых в `Тип объекта` записан муниципалитет (`"Мытищи г.о."`), а в `Котельная/ЦТП` — `"МКД"` — корректно нормализуются.  
+**Баг:** в источнике для МКД-объектов колонки сдвинуты: `object_type` содержит муниципалитет, `facility_type` содержит `"МКД"`, `municipality` пустой.  
+**Фикстура:** DataFrame формата A с одной строкой: `Тип объекта="Мытищи г.о."`, `Котельная/ЦТП="МКД"`, `Муниципалитет=""`.  
+**Assert:**
+- `meta['object_type'].iloc[0] == "МКД"`
+- `meta['municipality'].iloc[0] == "Мытищи г.о."`
+- `pd.isna(meta['facility_type'].iloc[0])`
+
+#### `test_mkd_columns_not_affected_for_ti`
+**Что:** ТИ-объекты (без МКД-паттерна) не затрагиваются `_fix_mkd_columns`.  
+**Фикстура:** строка с `Тип объекта="ТИ"`, `Котельная/ЦТП="Котельная"`, `Муниципалитет="Мытищи г.о."`.  
+**Assert:** `object_type == "ТИ"`, `municipality == "Мытищи г.о."`, `facility_type == "Котельная"`.
+
 #### `test_object_type_not_null_after_ingest`
 **Что:** после загрузки format-A архива `object_type` в objects_meta не NULL.  
 **Баг:** битый символ `"Тип ��бъекта"` в rename dict → все object_type были NULL.  

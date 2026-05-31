@@ -33,6 +33,29 @@ def _to_unix(series: pd.Series) -> pd.Series:
     return unix.where(dt.notna())
 
 
+def _fix_mkd_columns(meta: pd.DataFrame) -> pd.DataFrame:
+    """Исправляет МКД-паттерн в источнике.
+
+    В некоторых выгрузках для МКД-объектов колонки сдвинуты:
+      - 'Тип объекта'   содержит название муниципалитета ('Мытищи г.о.')
+      - 'Котельная/ЦТП' содержит 'МКД'  (реальный тип объекта)
+      - 'Муниципалитет' пустой
+
+    Исправление: если facility_type == 'МКД' и object_type похож на муниципалитет
+    (содержит 'г.о.') — переставляем значения.
+    """
+    mask = (
+        meta["facility_type"].astype(str).str.strip() == "МКД"
+    ) & (
+        meta["object_type"].astype(str).str.contains(r"г\.о\.", na=False)
+    )
+    meta = meta.copy()
+    meta.loc[mask, "municipality"] = meta.loc[mask, "object_type"]
+    meta.loc[mask, "object_type"] = "МКД"
+    meta.loc[mask, "facility_type"] = np.nan
+    return meta
+
+
 def detect_format(df: pd.DataFrame) -> str:
     cols = set(df.columns)
     if "t_forward" in cols or "p_forward" in cols:
@@ -83,6 +106,7 @@ def normalize_format_a(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     meta = df[
         ["object_id", "object_type", "facility_type", "facility_name", "municipality", "rso"]
     ].copy()
+    meta = _fix_mkd_columns(meta)
     return sensors, meta
 
 
