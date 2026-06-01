@@ -16,7 +16,7 @@ from jobs import IngestJob, IngestStats
 from pipeline import extractor, parser, cleaner
 
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data-service:8000")
-BATCH_SIZE = 200_000
+BATCH_SIZE = 50_000
 
 app = FastAPI(title="ingestion-service", version="0.1.0")
 
@@ -170,20 +170,42 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
         merge_processed=0,
     )
 
-    import time
-    with httpx.Client(base_url=DATA_SERVICE_URL, timeout=30) as client:
+    import time, uuid as _uuid
+    DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
+    INCOMING_DIR = os.path.join(DATA_DIR, "incoming")
+    os.makedirs(INCOMING_DIR, exist_ok=True)
+
+    # connect/pool быстрые, read дольше — event loop может быть занят при большой очереди
+    _timeout = httpx.Timeout(connect=10, read=120, write=30, pool=10)
+    with httpx.Client(base_url=DATA_SERVICE_URL, timeout=_timeout) as client:
         # Запоминаем кол-во строк до отправки
         sensors_before = client.get("/health").json().get("sensors_total", 0)
 
-        # Sensors батчами — POST возвращает сразу {}, запись идёт в фоне data-service
+        # Sensors: пишем ВСЕ батчи как staging parquet, отправляем все пути разом
+        # data-service worker дочитает всё из очереди и сделает ОДИН DuckDB merge
+        staging_files = []
         for start in range(0, merge_total, BATCH_SIZE):
             batch = sensors.iloc[start: start + BATCH_SIZE]
-            records = _sensors_to_payload(batch)
-            resp = client.post("/sensors/bulk", json=records)
-            resp.raise_for_status()
+            staging = os.path.join(INCOMING_DIR, f"{job_id}_{start}.parquet")
+            batch.to_parquet(staging, index=False)
+            staging_files.append(staging)
             jobs.update_job(job_id, merge_processed=min(start + BATCH_SIZE, merge_total))
 
-        # Ждём пока data-service допишет все батчи в parquet (max 10 минут)
+        print(f"[pipeline] {len(staging_files)} staging files written, sending to data-service", flush=True)
+
+        # Отправляем все пути одним запросом
+        for attempt in range(3):
+            try:
+                resp = client.post("/sensors/bulk", json={"parquet_paths": staging_files})
+                resp.raise_for_status()
+                break
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                print(f"[pipeline] bulk retry {attempt+1}: {e}", flush=True)
+                time.sleep(2)
+
+        # Ждём пока data-service допишет все батчи (max 10 минут)
         for _ in range(600):
             pending = client.get("/sensors/pending").json().get("pending", 0)
             if pending == 0:

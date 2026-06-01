@@ -20,23 +20,32 @@
 
 ---
 
-## Асинхронная запись sensors
+## Асинхронная запись sensors через shared volume
 
-`POST /sensors/bulk` возвращает ответ **немедленно** — данные ставятся в `asyncio.Queue`, воркер пишет их последовательно в фоне. Это предотвращает таймауты httpx при большом parquet (DuckDB COPY на 1+ ГБ файле занимает >120 сек).
+`POST /sensors/bulk` возвращает ответ **немедленно**. Данные передаются не через JSON body (медленно — 8+ МБ на батч), а через **shared Docker volume**:
 
 ```
-POST /sensors/bulk  →  {} (мгновенно)
-                              ↓
-                    asyncio.Queue (_write_queue)
-                              ↓
-                    _write_worker (фоновый asyncio task)
-                              ↓
-                    bulk_insert_sensors() в ThreadPoolExecutor
+ingestion-service:
+  1. Все батчи → staging parquet файлы в /app/data/incoming/
+     (50k строк ≈ 1-2 МБ каждый, запись за секунды)
+  2. POST /sensors/bulk {"parquet_paths": ["/app/data/incoming/job_0.parquet", ...]}
+     ← 56 байт JSON вместо 160 МБ
+  3. Ждёт GET /sensors/pending == 0
+
+data-service воркер:
+  1. Получает список путей (один элемент очереди)
+  2. pd.concat(все файлы) → единый DataFrame
+  3. Один _duckdb_append — ОДИН проход по sensors.parquet
+  4. Удаляет staging файлы
 ```
 
-**Мониторинг очереди:** `GET /sensors/pending` → `{"pending": N}`. ingestion-service ждёт `pending == 0` перед завершением задачи.
+**Почему shared volume а не JSON:** JSON-сериализация 200k записей = 33 МБ. Передача через Docker overlay network на macOS (VirtioFS) ≈ 0.5 МБ/с → таймаут. Parquet файл = 1-2 МБ, передача пути = 56 байт, response мгновенный.
 
-**Подсчёт inserted:** ingestion-service запоминает `GET /health → sensors_total` до отправки батчей и после — разница = количество вставленных строк.
+**Shared volume:** Docker named volume `incoming` монтируется в оба контейнера как `/app/data/incoming`. Staging файлы создаёт ingestion, читает и удаляет data-service.
+
+**Мониторинг:** `GET /sensors/pending` → `{"pending": N}`. ingestion ждёт `pending == 0`.
+
+**Подсчёт inserted:** `sensors_after - sensors_before` через `GET /health → sensors_total`.
 
 ## Потокобезопасность записи
 
@@ -115,11 +124,13 @@ GET /sensors/calendar/objects
     Объекты у которых есть данные за указанный день (JOIN sensors + objects_meta)
 
 POST /sensors/bulk
-     body: SensorRecord[]
-     → {}                  ← возвращает сразу, запись идёт асинхронно
+     body: {"parquet_paths": ["/app/data/incoming/file.parquet", ...]}
+           или {"parquet_path": "..."}   ← одиночный файл (совместимость)
+           или SensorRecord[]            ← fallback JSON режим
+     → {}                               ← возвращает сразу, запись асинхронная
 
 GET /sensors/pending
-    → {"pending": N}       ← кол-во батчей ожидающих записи в parquet
+    → {"pending": N}       ← кол-во задач ожидающих записи в parquet
 
 GET /health
     → {"status": "ok", "sensors_count": N, "sensors_total": N,

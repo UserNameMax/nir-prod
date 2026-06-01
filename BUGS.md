@@ -2,6 +2,25 @@
 
 ---
 
+## BUG-013 — JSON body 33 МБ не проходит через Docker overlay на macOS
+
+**Обнаружен:** прод (macOS Docker Desktop)  
+**Сервис:** ingestion-service → data-service  
+**Файлы:** `ingestion-service/main.py`, `data-service/routers/sensors.py`, `data-service/storage/writer.py`
+
+**Причина:** JSON-сериализация 200k записей = 33 МБ. Передача через Docker overlay на macOS (VirtioFS/gVisor) работает на скорости ~0.5-1 МБ/с → 30+ секунд → httpx timeout. Pydantic-валидация 200k объектов SensorRecord также добавляла 30+ секунд.
+
+**Цепочка попыток:**
+1. BATCH_SIZE 500k → 200k → 50k (меньше = меньше тело, но всё равно 8 МБ = 12 сек)
+2. Убрана Pydantic-валидация (`request.json()` вместо `list[SensorRecord]`) — помогло частично
+3. Async queue + POST возвращает {} — но накопление 25 батчей в очереди = CPU 101%, event loop заблокирован
+
+**Фикс:** shared Docker volume `incoming`. Ingestion пишет все батчи как parquet файлы, отправляет только список путей (56 байт JSON). Data-service воркер читает все файлы через `pd.concat`, делает ОДИН `_duckdb_append`, удаляет staging файлы. HTTP body = 56 байт, response мгновенный.
+
+**Тест:** `test_ingest_zip.py::test_sensors_saved_to_data_service` (покрывает end-to-end путь).
+
+---
+
 ## BUG-012 — httpx timeout при записи больших батчей в data-service
 
 **Обнаружен:** прод (sensors.parquet > 1 ГБ)  

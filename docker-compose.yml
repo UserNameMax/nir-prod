@@ -5,6 +5,7 @@ services:
       - "8000:8000"
     volumes:
       - ../data:/app/data:rw
+      - incoming:/app/data/incoming:rw
     restart: unless-stopped
     deploy:
       resources:
@@ -17,6 +18,9 @@ services:
       - "8001:8001"
     environment:
       DATA_SERVICE_URL: http://data-service:8000
+      DATA_DIR: /app/data
+    volumes:
+      - incoming:/app/data/incoming:rw
     depends_on:
       - data-service
     restart: unless-stopped
@@ -37,3 +41,6 @@ services:
       - data-service
       - ingestion-service
     restart: unless-stopped
+
+volumes:
+  incoming:

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query, Depends, BackgroundTasks
+from fastapi import APIRouter, Query, Depends, Request
 from typing import Annotated
 import asyncio
 
@@ -16,14 +16,23 @@ _write_worker_started = False
 
 
 async def _write_worker():
-    """Фоновый воркер — пишет батчи в parquet последовательно."""
+    """Фоновый воркер — один merge на весь батч staging-файлов."""
     while True:
-        data_dir, records = await _write_queue.get()
+        data_dir, payload = await _write_queue.get()
         loop = asyncio.get_event_loop()
         try:
-            await loop.run_in_executor(None, writer.bulk_insert_sensors, data_dir, records)
+            if isinstance(payload, list) and payload and isinstance(payload[0], str):
+                # Список путей к staging parquet файлам
+                print(f"[write_worker] merging {len(payload)} staging files", flush=True)
+                await loop.run_in_executor(
+                    None, writer.bulk_insert_sensors_from_files, data_dir, payload
+                )
+            else:
+                # Fallback: список dict (JSON режим)
+                await loop.run_in_executor(None, writer.bulk_insert_sensors, data_dir, payload)
         except Exception as e:
-            print(f"[write_worker] ERROR: {e}", flush=True)
+            import traceback
+            print(f"[write_worker] ERROR: {e}\n{traceback.format_exc()}", flush=True)
         finally:
             _write_queue.task_done()
 
@@ -78,14 +87,24 @@ def get_calendar_summary(
 
 
 @router.post("/bulk")
-async def bulk_insert(
-    records: list[SensorRecord],
-    data_dir: str = Depends(get_data_dir),
-):
-    """Принимает батч, ставит в очередь записи, возвращает сразу."""
+async def bulk_insert(request: Request, data_dir: str = Depends(get_data_dir)):
+    """Принимает батч через shared-parquet или JSON, ставит в очередь.
+
+    Если тело содержит {"parquet_path": "..."} — читаем файл из shared volume.
+    Иначе — сырой JSON список записей.
+    Возвращает {} мгновенно.
+    """
     ensure_worker()
-    records_list = [r.model_dump() for r in records]
-    await _write_queue.put((data_dir, records_list))
+    body = await request.json()
+    if isinstance(body, dict) and "parquet_paths" in body:
+        # Список staging файлов — один элемент очереди со всеми путями
+        await _write_queue.put((data_dir, body["parquet_paths"]))
+    elif isinstance(body, dict) and "parquet_path" in body:
+        # Один файл (обратная совместимость)
+        await _write_queue.put((data_dir, [body["parquet_path"]]))
+    else:
+        # Fallback: JSON список
+        await _write_queue.put((data_dir, body))
     return {}
 
 

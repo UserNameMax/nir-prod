@@ -57,6 +57,71 @@ def _duckdb_append(existing_path: str, new_df: pd.DataFrame) -> None:
     os.replace(tmp, existing_path)
 
 
+def bulk_insert_sensors_from_files(data_dir: str, staging_paths: list[str]) -> tuple[int, int]:
+    """Вставить данные из нескольких staging parquet-файлов за ОДИН DuckDB COPY.
+
+    Читает все файлы вместе, дедуплицирует по record_id,
+    мёрджит одним проходом — избегает N последовательных merge операций.
+    """
+    path = str(Path(data_dir) / "sensors.parquet")
+    # Читаем все staging файлы сразу
+    new_df = pd.concat([pd.read_parquet(p) for p in staging_paths], ignore_index=True)
+    new_df = new_df.drop_duplicates(subset=["record_id"])
+
+    try:
+        with _sensors_lock:
+            if not os.path.exists(path):
+                new_df.to_parquet(path, index=False)
+                return len(new_df), 0
+
+            existing_ids = _read_ids(path, "record_id")
+            to_insert = new_df[~new_df["record_id"].isin(existing_ids)]
+            skipped = len(new_df) - len(to_insert)
+
+            if not to_insert.empty:
+                _duckdb_append(path, to_insert)
+
+            print(f"[writer] inserted={len(to_insert)}, skipped={skipped}", flush=True)
+            return len(to_insert), skipped
+    finally:
+        for p in staging_paths:
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+
+
+def bulk_insert_sensors_from_file(data_dir: str, staging_path: str) -> tuple[int, int]:
+    """Вставить данные из staging parquet-файла (shared volume).
+
+    Читает staging_path напрямую через pandas (без dict round-trip),
+    дедуплицирует по record_id, мёрджит в sensors.parquet через DuckDB.
+    После мёрджа удаляет staging_path.
+    """
+    path = str(Path(data_dir) / "sensors.parquet")
+    new_df = pd.read_parquet(staging_path)
+
+    try:
+        with _sensors_lock:
+            if not os.path.exists(path):
+                new_df.to_parquet(path, index=False)
+                return len(new_df), 0
+
+            existing_ids = _read_ids(path, "record_id")
+            to_insert = new_df[~new_df["record_id"].isin(existing_ids)]
+            skipped = len(new_df) - len(to_insert)
+
+            if not to_insert.empty:
+                _duckdb_append(path, to_insert)
+
+            return len(to_insert), skipped
+    finally:
+        try:
+            os.remove(staging_path)
+        except Exception:
+            pass
+
+
 def bulk_insert_sensors(
     data_dir: str, records: list[dict]
 ) -> tuple[int, int]:

@@ -179,17 +179,27 @@ BOUNDS = {
 
 Дедупликация по `record_id` внутри текущей выгрузки.
 
-### Шаг 4 — Сохранение через data-service
+### Шаг 4 — Сохранение через data-service (shared volume)
 
-Батчами по **200 000 строк** (httpx timeout = 30 сек — POST возвращает мгновенно):
+Данные передаются через shared Docker volume `/app/data/incoming`, не через HTTP body.
+
 ```
-POST data-service:8000/sensors/bulk  → {}   (fire-and-forget, запись асинхронная)
+1. Все батчи по 50 000 строк → staging parquet файлы:
+   /app/data/incoming/{job_id}_0.parquet
+   /app/data/incoming/{job_id}_50000.parquet
+   ...
+
+2. Один POST /sensors/bulk с {"parquet_paths": [...все пути...]}
+   ← 56 байт JSON, возвращает {} мгновенно
+
+3. Polling GET /sensors/pending каждые 5 сек → ждём pending == 0 (max 10 мин)
+
+4. inserted = GET /health sensors_total after - before
 ```
 
-После отправки всех батчей:
-1. Polling `GET /sensors/pending` каждую секунду — ждём `pending == 0` (max 10 минут)
-2. `GET /health` → `sensors_total` — итоговое кол-во строк
-3. `inserted = sensors_after - sensors_before`
+**Почему не JSON:** 50k строк = 8 МБ JSON. Через Docker overlay на macOS (VirtioFS) ≈ 12+ сек на запрос → таймауты. Parquet файл 1-2 МБ на диске, в HTTP только путь (56 байт).
+
+**Retry:** 3 попытки при сбое POST с паузой 2 сек между попытками.
 
 Objects отправляются синхронно (маленький файл, быстро):
 ```
