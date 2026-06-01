@@ -48,3 +48,13 @@
 #### `test_read_sensors_nan_is_json_safe`
 **Что:** сенсорные данные с NaN сериализуются в JSON без ошибок.  
 **Assert:** `"NaN"` отсутствует в сериализованном результате
+
+#### `test_read_sensors_with_int64_record_id`
+**Что:** parquet где `record_id` хранится как `int64` (старый формат до исправления ingestion) — `read_sensors` возвращает записи без 500 ошибки.  
+**Баг:** BUG-004 — реальные parquet-файлы содержали `record_id: int64`. Pydantic-схема ожидает `str` → `Input should be a valid string`.  
+**Фикстура:** создать `sensors.parquet` с `record_id` типа `int64` через pandas.  
+**Assert:** `read_sensors()` возвращает записи, `items[0]['record_id']` — строка или int, `json.dumps(items)` не бросает исключений.
+
+#### `test_read_sensors_with_int64_object_id`
+**Что:** аналогично BUG-004 для `object_id: int64`.  
+**Assert:** `read_sensors()` не падает, `items[0]['object_id']` — строка.

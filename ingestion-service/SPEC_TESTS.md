@@ -305,3 +305,19 @@ tests/
 
 #### `test_upload_xlsb_sensors_in_data_service`
 **Assert:** `sensors_inserted > 0`, данные видны через GET `/sensors`.
+
+---
+
+### `test_ingest_large.py` — загрузка больших архивов
+
+#### `test_large_archive_no_timeout`
+**Что:** архив с 1M+ строк обрабатывается без ошибки `timed out`.  
+**Баг:** BUG-012 — httpx timeout при синхронной записи большого батча JSON через data-service. BUG-013 — JSON 33 МБ не проходит Docker overlay на macOS.  
+**Фикстура:** ZIP с xlsx содержащим 1M строк (генерировать программно).  
+**Assert:** `status == "done"`, `error is None`, `sensors_inserted > 0`.
+
+#### `test_bulk_transfer_uses_staging_files`
+**Что:** при загрузке архива в `/app/data/incoming/` создаются staging parquet файлы, после завершения — удаляются.  
+**Баг:** BUG-013 — переход от JSON body к shared-volume parquet.  
+**Фикстура:** мониторинг директории `incoming/` во время обработки.  
+**Assert:** во время processing — файлы появляются; после done — директория пуста.
