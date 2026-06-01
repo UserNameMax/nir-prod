@@ -2,6 +2,25 @@
 
 ---
 
+## BUG-012 — httpx timeout при записи больших батчей в data-service
+
+**Обнаружен:** прод (sensors.parquet > 1 ГБ)  
+**Сервис:** ingestion-service → data-service  
+**Файлы:** `data-service/routers/sensors.py`, `ingestion-service/main.py`
+
+**Причина:** `POST /sensors/bulk` выполнял DuckDB COPY синхронно — читал весь parquet (1+ ГБ) и писал tmp-файл той же величины. При 42M+ строк это занимало >120 сек. httpx ждал ответа и падал с `timed out`. Дополнительно мешала нехватка места на диске (ENOSPC при создании tmp-файла).
+
+**Фикс:**
+- `POST /sensors/bulk` теперь кладёт данные в `asyncio.Queue` и возвращает `{}` немедленно
+- Фоновый воркер (`_write_worker`) пишет батчи последовательно через `run_in_executor`
+- `GET /sensors/pending` — ingestion-service ждёт опустошения очереди
+- Подсчёт inserted: `sensors_after - sensors_before` через `GET /health`
+- BATCH_SIZE: 500k → 200k, httpx timeout: 120 → 30 сек (POST мгновенный)
+
+**Тест:** `test_ingest_zip.py::test_sensors_saved_to_data_service` — проверить что после done данные видны (неявно покрывает pending-ожидание).
+
+---
+
 ## BUG-008 — xlsb-файлы не распознавались и давали нулевые даты
 
 **Обнаружен:** прод (реальные данные, архив 18.12-24.12.rar)  

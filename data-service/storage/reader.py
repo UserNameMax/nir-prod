@@ -134,7 +134,7 @@ def read_sensors_health(data_dir: str) -> dict:
         """
     ).fetchone()
     con.close()
-    return {"sensors_count": row[0], "period_from": row[1], "period_to": row[2]}
+    return {"sensors_count": row[0], "sensors_total": row[0], "period_from": row[1], "period_to": row[2]}
 
 
 def read_objects_by_day(

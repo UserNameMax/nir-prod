@@ -16,7 +16,7 @@ from jobs import IngestJob, IngestStats
 from pipeline import extractor, parser, cleaner
 
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data-service:8000")
-BATCH_SIZE = 500_000
+BATCH_SIZE = 200_000
 
 app = FastAPI(title="ingestion-service", version="0.1.0")
 
@@ -170,17 +170,32 @@ def _pipeline(job_id: str, archive_path: str, tmp_dir: str) -> None:
         merge_processed=0,
     )
 
-    with httpx.Client(base_url=DATA_SERVICE_URL, timeout=120) as client:
-        # Sensors батчами — обновляем прогресс мерджа после каждого батча
+    import time
+    with httpx.Client(base_url=DATA_SERVICE_URL, timeout=30) as client:
+        # Запоминаем кол-во строк до отправки
+        sensors_before = client.get("/health").json().get("sensors_total", 0)
+
+        # Sensors батчами — POST возвращает сразу {}, запись идёт в фоне data-service
         for start in range(0, merge_total, BATCH_SIZE):
             batch = sensors.iloc[start: start + BATCH_SIZE]
             records = _sensors_to_payload(batch)
             resp = client.post("/sensors/bulk", json=records)
             resp.raise_for_status()
-            data = resp.json()
-            total_inserted += data["inserted"]
-            total_skipped += data["skipped_duplicates"]
             jobs.update_job(job_id, merge_processed=min(start + BATCH_SIZE, merge_total))
+
+        # Ждём пока data-service допишет все батчи в parquet (max 10 минут)
+        for _ in range(600):
+            pending = client.get("/sensors/pending").json().get("pending", 0)
+            if pending == 0:
+                break
+            time.sleep(1)
+        else:
+            print(f"[pipeline] WARNING: write queue not empty after 10 min", flush=True)
+
+        # Итог: inserted = разница в кол-ве строк
+        sensors_after = client.get("/health").json().get("sensors_total", 0)
+        total_inserted = max(0, sensors_after - sensors_before)
+        total_skipped = merge_total - total_inserted
 
         # Objects — убираем строки без object_id (pd.NA после _clean_str)
         meta_clean = meta.dropna(subset=["object_id"])

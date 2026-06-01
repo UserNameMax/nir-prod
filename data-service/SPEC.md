@@ -20,9 +20,27 @@
 
 ---
 
+## Асинхронная запись sensors
+
+`POST /sensors/bulk` возвращает ответ **немедленно** — данные ставятся в `asyncio.Queue`, воркер пишет их последовательно в фоне. Это предотвращает таймауты httpx при большом parquet (DuckDB COPY на 1+ ГБ файле занимает >120 сек).
+
+```
+POST /sensors/bulk  →  {} (мгновенно)
+                              ↓
+                    asyncio.Queue (_write_queue)
+                              ↓
+                    _write_worker (фоновый asyncio task)
+                              ↓
+                    bulk_insert_sensors() в ThreadPoolExecutor
+```
+
+**Мониторинг очереди:** `GET /sensors/pending` → `{"pending": N}`. ingestion-service ждёт `pending == 0` перед завершением задачи.
+
+**Подсчёт inserted:** ingestion-service запоминает `GET /health → sensors_total` до отправки батчей и после — разница = количество вставленных строк.
+
 ## Потокобезопасность записи
 
-Два независимых `threading.Lock` — `sensors_lock` и `meta_lock`. Два отдельных lock-а позволяют параллельно писать sensors и meta.
+Два независимых `threading.Lock` — `sensors_lock` и `meta_lock`. Воркер вызывает `bulk_insert_sensors` через `run_in_executor` — гарантирует что DuckDB COPY не запускается параллельно.
 
 ### Алгоритм `bulk_insert_sensors` (под lock)
 
@@ -98,11 +116,14 @@ GET /sensors/calendar/objects
 
 POST /sensors/bulk
      body: SensorRecord[]
-     → BulkResult
+     → {}                  ← возвращает сразу, запись идёт асинхронно
+
+GET /sensors/pending
+    → {"pending": N}       ← кол-во батчей ожидающих записи в parquet
 
 GET /health
-    → {"status": "ok", "sensors_count": 36000000,
-       "period_from": "2025-10-01", "period_to": "2026-03-25"}
+    → {"status": "ok", "sensors_count": N, "sensors_total": N,
+       "period_from": "2025-10-01", "period_to": "2026-05-27"}
 ```
 
 ### Objects

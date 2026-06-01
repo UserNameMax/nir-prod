@@ -8,6 +8,11 @@ from routers import sensors, objects
 
 app = FastAPI(title="data-service", version="0.1.0")
 
+
+@app.on_event("startup")
+async def startup():
+    sensors.ensure_worker()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

@@ -181,13 +181,22 @@ BOUNDS = {
 
 ### Шаг 4 — Сохранение через data-service
 
-Батчами по **500 000 строк**:
+Батчами по **200 000 строк** (httpx timeout = 30 сек — POST возвращает мгновенно):
 ```
-POST http://data-service:8000/sensors/bulk  → body: SensorRecord[500000]
-POST http://data-service:8000/objects/bulk  → body: ObjectMeta[]
+POST data-service:8000/sensors/bulk  → {}   (fire-and-forget, запись асинхронная)
 ```
 
-Перед отправкой objects: `meta.dropna(subset=["object_id"])` — строки с пустым object_id не отправляются (Pydantic требует `str`, не `None` — BUG-009).
+После отправки всех батчей:
+1. Polling `GET /sensors/pending` каждую секунду — ждём `pending == 0` (max 10 минут)
+2. `GET /health` → `sensors_total` — итоговое кол-во строк
+3. `inserted = sensors_after - sensors_before`
+
+Objects отправляются синхронно (маленький файл, быстро):
+```
+POST data-service:8000/objects/bulk  → BulkResult
+```
+
+Перед отправкой objects: `meta.dropna(subset=["object_id"])` — строки с пустым object_id не отправляются (Pydantic требует `str`, не `None` — BUG-011).
 
 `period_from/to` вычисляется как `min/max(ts_recorded)` среди строк с `ts_recorded > 0`.
 
