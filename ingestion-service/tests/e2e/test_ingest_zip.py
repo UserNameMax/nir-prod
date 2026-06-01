@@ -178,3 +178,25 @@ def test_merge_partial_overlap(ingest_client, data_client, tmp_path):
 
     health = data_client.get("/health").json()
     assert health["sensors_count"] == 10
+
+
+def test_object_type_not_null_after_ingest(ingest_client, data_client, tmp_path):
+    """BUG-010: битый символ 'Тип ──бъекта' в rename dict → all object_type NULL.
+    После фикса object_type должен заполняться из выгрузки формата A."""
+    archive = make_zip_format_a(tmp_path / "test_otype.zip", tmp_path, rows=5)
+    with open(archive, "rb") as f:
+        r = ingest_client.post(
+            "/ingest/upload",
+            files={"files": ("test_otype.zip", f, "application/zip")},
+        )
+    assert r.status_code == 200
+    job = wait_job_done(ingest_client, r.json()[0]["job_id"], timeout=60)
+    assert job["status"] == "done", f"Job failed: {job.get('error')}"
+
+    # Проверяем объекты через data-service
+    objects_r = data_client.get("/objects")
+    assert objects_r.status_code == 200
+    items = objects_r.json()["items"]
+    # Хотя бы один объект должен иметь object_type != None
+    non_null = [o for o in items if o.get("object_type") is not None]
+    assert len(non_null) > 0, "Все object_type NULL — BUG-010 регрессия"

@@ -106,6 +106,37 @@ def test_dedup_meta_prefers_non_null_object_type():
     assert result.iloc[0]["object_type"] == "ЦТП"
 
 
+# ── BUG-009: NaT → NaN (не 0) ─────────────────────────────────────────────────
+
+def test_drop_row_ts_recorded_nan_from_invalid_date():
+    """BUG-009: строка с ts_recorded=NaN (от невалидной даты) удаляется cleaner-ом.
+    Старый _to_unix делал fillna(0) — строки с ts=0 проходили насквозь."""
+    df = _df(_make_row(ts_recorded=float("nan")))
+    result = clean_sensors(df)
+    assert len(result) == 0, "Строка с ts_recorded=NaN должна быть удалена"
+
+
+def test_drop_row_ts_recorded_zero_not_dropped():
+    """ts_recorded=0 (если явно передан) не удаляется cleaner-ом.
+    Cleaner проверяет isna(), а не == 0. Удаление ts<=0 — ответственность writer."""
+    df = _df(_make_row(ts_recorded=0))
+    result = clean_sensors(df)
+    # ts=0 технически невалиден, но cleaner его НЕ удаляет (это не NaN)
+    # Документируем текущее поведение
+    assert len(result) == 1
+
+
+# ── BUG-011: object_id=pd.NA удаляется cleaner-ом ─────────────────────────────
+
+def test_object_id_na_drops_row():
+    """BUG-011: строка с object_id=pd.NA (от пустой ячейки Excel) удаляется.
+    До _clean_str — astype(str) давал 'nan', который проходил как валидный."""
+    import pandas as pd
+    df = pd.DataFrame([_make_row(object_id=pd.NA)])
+    result = clean_sensors(df)
+    assert len(result) == 0, "Строка с object_id=pd.NA должна быть удалена"
+
+
 def test_dedup_meta_keeps_different_objects():
     df = pd.DataFrame([
         {"object_id": "OBJ_1", "object_type": "ЦТП", "facility_type": None, "facility_name": None, "municipality": None, "rso": None},

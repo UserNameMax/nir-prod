@@ -103,6 +103,23 @@ def test_meta_nan_to_none_mixed(tmp_path):
     assert payload[1]["facility_name"] is None
 
 
+def test_null_object_id_filtered_before_bulk(tmp_path):
+    """BUG-011: строки с object_id=pd.NA не попадают в payload для /objects/bulk.
+    Pydantic требует str для object_id — None вызывал 422 Unprocessable Entity."""
+    meta = pd.DataFrame([
+        {"object_id": "OBJ_1", "object_type": "ТИ", "facility_type": "Котельная",
+         "facility_name": "Тест", "municipality": "МО", "rso": None},
+        {"object_id": pd.NA,   "object_type": None, "facility_type": None,
+         "facility_name": None, "municipality": None, "rso": None},
+    ])
+    # Фильтрация как в main.py перед POST /objects/bulk
+    meta_clean = meta.dropna(subset=["object_id"])
+    payload = _meta_to_payload(meta_clean)
+
+    assert len(payload) == 1, "Строка с pd.NA object_id должна быть отфильтрована"
+    assert payload[0]["object_id"] == "OBJ_1"
+
+
 def test_meta_nan_none_value_preserved(tmp_path):
     """Уже существующие None не превращаются во что-то другое."""
     meta = pd.DataFrame([

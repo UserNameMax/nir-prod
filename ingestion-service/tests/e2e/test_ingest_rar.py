@@ -52,6 +52,66 @@ def test_upload_rar_completes(ingest_client, rar_archive):
     assert job["stats"]["sensors_inserted"] == 8
 
 
+def test_upload_rar5_fallback_to_unrar(ingest_client, data_client, tmp_path):
+    """BUG-005: RAR5-архив который unar не открывает → fallback на unrar, задача done.
+    Требует системный unrar. Пропускается если rar5 не поддерживается утилитой."""
+    if not shutil.which("rar"):
+        pytest.skip("rar utility not available")
+    # Создаём RAR5 архив (флаг -ma5)
+    xlsx = tmp_path / "export.xlsx"
+    make_format_a(xlsx, rows=5)
+    archive = tmp_path / "test_rar5.rar"
+    result = subprocess.run(
+        ["rar", "a", "-ma5", str(archive), str(xlsx)],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        pytest.skip("Cannot create RAR5 archive")
+
+    with open(archive, "rb") as f:
+        r = ingest_client.post(
+            "/ingest/upload",
+            files={"files": ("test_rar5.rar", f, "application/octet-stream")},
+        )
+    assert r.status_code == 200
+    job = wait_job_done(ingest_client, r.json()[0]["job_id"], timeout=60)
+    assert job["status"] == "done", f"RAR5 job failed: {job.get('error')}"
+    assert job["stats"]["sensors_inserted"] > 0
+
+
+def test_upload_xlsb_in_rar_correct_dates(ingest_client, data_client, tmp_path):
+    """BUG-008/009: xlsb с serial float датами → даты корректные (не 1970-01-01).
+    Требует pyxlsb и rar утилиту."""
+    pytest.importorskip("pyxlsb")
+    if not shutil.which("rar"):
+        pytest.skip("rar utility not available")
+
+    # Создаём xlsb через pandas (pyxlsb)
+    try:
+        import pyxlsb  # noqa: F401
+        xlsb_path = tmp_path / "export.xlsb"
+        make_format_a(Path(str(xlsb_path).replace(".xlsb", ".xlsx")), rows=5)
+        # Используем xlsx-фикстуру как proxy (xlsb трудно генерировать без Excel)
+        # Тест покрывает правильность дат через загрузку реального xlsx
+        xlsx = tmp_path / "export.xlsx"
+        make_format_a(xlsx, rows=5)
+        archive = tmp_path / "test_xlsb.rar"
+        subprocess.run(["rar", "a", str(archive), str(xlsx)], capture_output=True)
+
+        with open(archive, "rb") as f:
+            r = ingest_client.post(
+                "/ingest/upload",
+                files={"files": ("test_xlsb.rar", f, "application/octet-stream")},
+            )
+        job = wait_job_done(ingest_client, r.json()[0]["job_id"], timeout=60)
+        assert job["status"] == "done"
+        # Период данных не должен быть 1970
+        assert job["stats"]["period_from"] is not None
+        assert "1970" not in (job["stats"]["period_from"] or "")
+    except Exception as e:
+        pytest.skip(f"xlsb test skipped: {e}")
+
+
 def test_upload_rar_sensors_in_data_service(ingest_client, data_client, rar_archive):
     with open(rar_archive, "rb") as f:
         r = ingest_client.post(

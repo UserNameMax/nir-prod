@@ -169,3 +169,46 @@ def test_read_sensors_nan_is_json_safe(tmp_path):
     items, _ = read_sensors(str(tmp_path), object_id="OBJ_1")
     serialized = json.dumps(items)
     assert "NaN" not in serialized
+
+
+# ── BUG-004: record_id / object_id хранятся как int64 ─────────────────────────
+
+def test_read_sensors_with_int64_record_id(tmp_path):
+    """BUG-004: реальные parquet-файлы хранят record_id как int64.
+    Pydantic-схема ожидает str → 500. read_sensors должен возвращать данные
+    без исключения (DuckDB автоматически кастит int64 → строку при чтении)."""
+    sensors_path = tmp_path / "sensors.parquet"
+    # Создаём parquet с record_id как int64 (старый формат)
+    df = pd.DataFrame([{
+        "record_id": np.int64(12345),
+        "object_id": "OBJ_1",
+        "ts_measurement": np.int64(1700000000),
+        "t_supply": 60.0, "t_return": 50.0, "p_supply": 6.0, "p_return": 4.0,
+        "ts_recorded": np.int64(1700000060),
+    }])
+    df.to_parquet(sensors_path, index=False)
+    assert df["record_id"].dtype == np.int64  # убеждаемся что это int64
+
+    # Не должно падать с InputValidationError
+    items, total = read_sensors(str(tmp_path), object_id="OBJ_1")
+
+    assert total == 1
+    assert items[0]["record_id"] is not None
+
+
+def test_read_sensors_with_int64_object_id(tmp_path):
+    """BUG-004: object_id как int64 в parquet → read_sensors не падает."""
+    sensors_path = tmp_path / "sensors.parquet"
+    df = pd.DataFrame([{
+        "record_id": "abc123",
+        "object_id": np.int64(9999),
+        "ts_measurement": np.int64(1700000000),
+        "t_supply": 60.0, "t_return": 50.0, "p_supply": 6.0, "p_return": 4.0,
+        "ts_recorded": np.int64(1700000060),
+    }])
+    df.to_parquet(sensors_path, index=False)
+
+    # Запрос по object_id который хранится как int
+    items, total = read_sensors(str(tmp_path), object_id="9999")
+
+    assert total == 1
