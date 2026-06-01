@@ -1,100 +1,45 @@
-# data-service — Спецификация
+# Data Service — Спецификация
 
-**Порт:** 8000  
-**Стек:** FastAPI + Uvicorn, DuckDB, Pydantic v2
+## Бизнес-ценность
 
-## Назначение
-
-Единственный сервис, который читает и пишет parquet-файлы. Все остальные сервисы работают с данными только через него.
+Единственный владелец хранилища данных в системе. Изолирует детали хранения от остальных компонентов — ни Viewer, ни Ingestion Service не знают как и где хранятся данные. Гарантирует дедупликацию, атомарность и целостность данных при любых операциях записи.
 
 ---
 
-## Хранилище
+## Роль в системе
 
-| Файл | Ключ дедупликации | Колонки |
-|------|------------------|---------|
-| `sensors.parquet` | `record_id` | `record_id`, `object_id`, `ts_measurement` (unix), `t_supply`, `t_return`, `p_supply`, `p_return`, `ts_recorded` |
-| `objects_meta.parquet` | `object_id` | `object_id`, `object_type`, `facility_type`, `facility_name`, `municipality`, `rso` |
+```
+Ingestion Service ──POST /bulk──▶ Data Service ──read/write──▶ Хранилище
+Viewer            ──GET  /...──▶ Data Service
+```
 
-Путь к папке с файлами передаётся через env `DATA_DIR` (default: `/app/data`).
+Data Service — единственный writer хранилища. Это предотвращает гонки при параллельных запросах на запись.
 
 ---
 
-## Асинхронная запись sensors через shared volume
+## Функциональные требования
 
-`POST /sensors/bulk` возвращает ответ **немедленно**. Данные передаются не через JSON body (медленно — 8+ МБ на батч), а через **shared Docker volume**:
+### Показания датчиков (sensors)
+- Хранение временных рядов по объектам: 4 датчика (t_supply, t_return, p_supply, p_return)
+- Дедупликация по уникальному идентификатору записи (`record_id`)
+- Запрос показаний по объекту с фильтрацией по временному диапазону, пагинация
+- Калькуляция дней с данными для объекта (для отображения в календаре)
+- Калькуляция глобального покрытия: сколько объектов имеют данные за каждый день
+- Запрос объектов имеющих данные за конкретный день
 
-```
-ingestion-service:
-  1. Все батчи → staging parquet файлы в /app/data/incoming/
-     (50k строк ≈ 1-2 МБ каждый, запись за секунды)
-  2. POST /sensors/bulk {"parquet_paths": ["/app/data/incoming/job_0.parquet", ...]}
-     ← 56 байт JSON вместо 160 МБ
-  3. Ждёт GET /sensors/pending == 0
+### Метаданные объектов
+- Хранение справочника объектов: тип, тип котельной, название, муниципалитет, РСО
+- Поиск и фильтрация объектов
+- Upsert: при повторной загрузке старые записи имеют приоритет
 
-data-service воркер:
-  1. Получает список путей (один элемент очереди)
-  2. pd.concat(все файлы) → единый DataFrame
-  3. Один _duckdb_append — ОДИН проход по sensors.parquet
-  4. Удаляет staging файлы
-```
-
-**Почему shared volume а не JSON:** JSON-сериализация 200k записей = 33 МБ. Передача через Docker overlay network на macOS (VirtioFS) ≈ 0.5 МБ/с → таймаут. Parquet файл = 1-2 МБ, передача пути = 56 байт, response мгновенный.
-
-**Shared volume:** Docker named volume `incoming` монтируется в оба контейнера как `/app/data/incoming`. Staging файлы создаёт ingestion, читает и удаляет data-service.
-
-**Мониторинг:** `GET /sensors/pending` → `{"pending": N}`. ingestion ждёт `pending == 0`.
-
-**Подсчёт inserted:** `sensors_after - sensors_before` через `GET /health → sensors_total`.
-
-## Потокобезопасность записи
-
-Два независимых `threading.Lock` — `sensors_lock` и `meta_lock`. Воркер вызывает `bulk_insert_sensors` через `run_in_executor` — гарантирует что DuckDB COPY не запускается параллельно.
-
-### Алгоритм `bulk_insert_sensors` (под lock)
-
-1. Прочитать только колонку `record_id` через pyarrow (`pq.read_table(columns=["record_id"])`) — 1 колонка вместо 8, быстро
-2. Отфильтровать новые строки (не дубликаты)
-3. Если есть что записывать — DuckDB streaming merge:
-   ```sql
-   COPY (
-       SELECT * FROM read_parquet('sensors.parquet')  -- стримит батчами
-       UNION ALL
-       SELECT * FROM new_records                       -- новые строки из памяти
-   ) TO 'sensors.parquet.tmp' (FORMAT PARQUET)
-   ```
-4. `os.replace(tmp, target)` — атомарный rename
-
-**Почему DuckDB а не pandas:** `pd.read_parquet` загружает весь файл (36М строк) в RAM → OOM при больших архивах. DuckDB стримит существующий файл батчами — пиковая память ~300-500 МБ независимо от размера файла.
-
-### Алгоритм `bulk_upsert_objects` (под lock)
-
-Аналогично, но файл объектов маленький (~4к строк) — используется pandas concat (без DuckDB).
+### Общие требования
+- Атомарная запись (без частичных состояний)
+- Запись строго последовательная (один активный writer)
+- Мониторинг состояния хранилища (количество записей, период данных)
 
 ---
 
-## Пагинация
-
-Все list-эндпоинты используют offset-пагинацию:
-
-```
-?offset=0&limit=1000    (default limit=1000, max=10000)
-```
-
-Ответ — конверт `Page[T]`:
-
-```json
-{
-  "items": [...],
-  "total": 36000000,
-  "offset": 0,
-  "limit": 1000
-}
-```
-
----
-
-## Endpoints
+## API-контракт
 
 ### Sensors
 
@@ -103,38 +48,37 @@ GET /sensors
     ?object_id=<str>     обязательный
     &from_ts=<unix>
     &to_ts=<unix>
-    &offset=0&limit=1000
+    &offset=0&limit=1000  (max 10000)
     → Page[SensorRecord]
 
 GET /sensors/calendar
-    ?object_id=<str>     обязательный
+    ?object_id=<str>
     → {"dates": ["2025-10-01", ...]}
-    Дни, в которые есть хотя бы одна запись для объекта
+    Дни с хотя бы одной записью для объекта
 
 GET /sensors/calendar/summary
     ?from_date=<YYYY-MM-DD>
     &to_date=<YYYY-MM-DD>
     → [{"day": "2025-10-01", "objects_count": 4200}, ...]
-    Для каждого дня — количество уникальных объектов с данными
 
 GET /sensors/calendar/objects
-    ?date=<YYYY-MM-DD>   обязательный
+    ?date=<YYYY-MM-DD>
     &offset=0&limit=100
     → Page[ObjectMeta]
-    Объекты у которых есть данные за указанный день (JOIN sensors + objects_meta)
-
-POST /sensors/bulk
-     body: {"parquet_paths": ["/app/data/incoming/file.parquet", ...]}
-           или {"parquet_path": "..."}   ← одиночный файл (совместимость)
-           или SensorRecord[]            ← fallback JSON режим
-     → {}                               ← возвращает сразу, запись асинхронная
+    Объекты с данными за указанный день
 
 GET /sensors/pending
-    → {"pending": N}       ← кол-во задач ожидающих записи в parquet
+    → {"pending": N}
+    Количество задач записи в очереди (0 = запись завершена)
+
+POST /sensors/bulk
+    body: {"parquet_paths": ["...", ...]}  ← основной режим
+          или SensorRecord[]               ← fallback
+    → {}   (возвращает немедленно, запись асинхронная)
 
 GET /health
-    → {"status": "ok", "sensors_count": N, "sensors_total": N,
-       "period_from": "2025-10-01", "period_to": "2026-05-27"}
+    → {"status": "ok", "sensors_total": N,
+       "period_from": "YYYY-MM-DD", "period_to": "YYYY-MM-DD"}
 ```
 
 ### Objects
@@ -143,7 +87,7 @@ GET /health
 GET /objects
     ?municipality=<str>
     &facility_type=<str>
-    &q=<str>             поиск по facility_name (ILIKE)
+    &q=<str>              поиск по facility_name (ILIKE)
     &offset=0&limit=100
     → Page[ObjectMeta]
 
@@ -155,47 +99,116 @@ PUT /objects/{object_id}
     → ObjectMeta
 
 POST /objects/bulk
-     body: ObjectMeta[]  upsert: старые записи приоритетнее
-     → BulkResult
+    body: ObjectMeta[]    upsert: старые записи приоритетнее
+    → BulkResult
 ```
 
----
-
-## Схемы (Pydantic)
+### Схемы
 
 ```python
-class SensorRecord(BaseModel):
-    record_id: str
-    object_id: str
-    ts_measurement: int        # unix seconds
-    t_supply: float | None
-    t_return: float | None
-    p_supply: float | None
-    p_return: float | None
-    ts_recorded: int           # unix seconds
+class SensorRecord:
+    record_id: str          # уникальный идентификатор измерения
+    object_id: str          # идентификатор объекта
+    ts_measurement: int     # unix seconds — время снятия показания
+    t_supply: float | None  # температура подачи, °C
+    t_return: float | None  # температура обратки, °C
+    p_supply: float | None  # давление подачи, МПа
+    p_return: float | None  # давление обратки, МПа
+    ts_recorded: int        # unix seconds — время записи в систему
 
-class ObjectMeta(BaseModel):
+class ObjectMeta:
     object_id: str
-    object_type: str | None
-    facility_type: str | None
+    object_type: str | None    # тип объекта (ТИ, МКД, ...)
+    facility_type: str | None  # тип котельной (Котельная, ЦТП, ...)
     facility_name: str | None
     municipality: str | None
-    rso: str | None
+    rso: str | None            # ресурсоснабжающая организация
 
-class ObjectMetaUpdate(BaseModel):
-    object_type: str | None = None
-    facility_type: str | None = None
-    facility_name: str | None = None
-    municipality: str | None = None
-    rso: str | None = None
-
-class BulkResult(BaseModel):
+class BulkResult:
     inserted: int
     skipped_duplicates: int
 
-class Page(BaseModel, Generic[T]):
+class Page[T]:
     items: list[T]
     total: int
     offset: int
     limit: int
 ```
+
+---
+
+## Нефункциональные требования
+
+| Параметр | Требование |
+|----------|-----------|
+| Дедупликация | гарантируется по record_id |
+| Атомарность | запись либо полная, либо не происходит |
+| Изоляция writer | только один активный writer в любой момент |
+| Время отклика (чтение) | < 2 сек для типовых запросов |
+| Масштаб | 50M+ записей |
+
+---
+
+## Текущая реализация (reference)
+
+**Стек:** FastAPI + Uvicorn, DuckDB, Apache Parquet, Python 3.12
+
+### Хранилище
+
+Два parquet-файла на локальной файловой системе:
+
+| Файл | Ключ дедупликации | Описание |
+|------|------------------|---------|
+| `sensors.parquet` | `record_id` (string) | Временные ряды датчиков, 55M+ строк, ~1 ГБ |
+| `objects_meta.parquet` | `object_id` (string) | Справочник объектов, ~4.5k строк |
+
+Путь задаётся через env `DATA_DIR` (default: `/app/data`).
+
+### Запись: асинхронная очередь + shared volume
+
+`POST /sensors/bulk` возвращает `{}` мгновенно. Данные передаются через shared Docker volume:
+
+```
+Ingestion пишет batches → staging parquet в /app/data/incoming/
+POST /sensors/bulk {"parquet_paths": [...]}   ← 56 байт
+
+Data Service воркер:
+  pd.concat(все файлы) → дедупликация → один DuckDB COPY → удаление staging
+```
+
+**Почему не JSON:** 50k строк = 8 МБ JSON. Через Docker overlay на macOS (VirtioFS) — 12+ сек/батч → таймаут. Parquet файл = 1-2 МБ, HTTP = 56 байт.
+
+### Алгоритм bulk_insert_sensors
+
+```
+1. pd.concat(staging files) → единый DataFrame, drop_duplicates(record_id)
+2. pq.read_table(sensors.parquet, columns=["record_id"]) → existing_ids
+   (читаем только 1 колонку из 8 — быстро)
+3. filter: to_insert = new_df[~new_df.record_id.isin(existing_ids)]
+4. DuckDB COPY:
+   COPY (SELECT * FROM read_parquet('sensors.parquet')
+         UNION ALL SELECT * FROM new_records)
+   TO 'sensors.parquet.tmp' (FORMAT PARQUET)
+5. os.replace(tmp, sensors.parquet)  ← атомарный rename
+```
+
+### Потокобезопасность
+
+`threading.Lock` (`_sensors_lock`, `_meta_lock`) защищают от конкурентных записей внутри процесса. Uvicorn запускается с `--workers 1`.
+
+### Docker volume
+
+```yaml
+volumes:
+  - ../data:/app/data:rw        # основное хранилище (bind mount)
+  - incoming:/app/data/incoming  # staging для передачи батчей (named volume)
+```
+
+### Ограничения текущей реализации
+
+- Monolithic parquet: DuckDB COPY читает весь файл (~1 ГБ) при каждой записи. На macOS Docker (VirtioFS) — несколько минут на операцию
+- Lock не работает при `--workers > 1`
+- Состояние очереди теряется при рестарте контейнера
+- Shared volume — не подходит для деплоя на несколько машин без сетевой ФС
+
+Подробнее: [TECH_DEBT.md](../TECH_DEBT.md)
