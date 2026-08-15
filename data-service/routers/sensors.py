@@ -1,6 +1,10 @@
-from fastapi import APIRouter, Query, Depends, Request
+from fastapi import APIRouter, Query, Depends, Request, BackgroundTasks, HTTPException
+from fastapi.responses import FileResponse
 from typing import Annotated
+from pathlib import Path
 import asyncio
+import shutil
+import tempfile
 
 from schemas import SensorRecord, Page, ObjectMeta
 from storage import reader, writer
@@ -55,6 +59,32 @@ def get_sensors(
 ):
     items, total = reader.read_sensors(data_dir, object_id, from_ts, to_ts, offset, limit)
     return Page(items=items, total=total, offset=offset, limit=limit)
+
+
+@router.get("/export")
+def export_sensors(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    background: BackgroundTasks = None,
+    data_dir: str = Depends(get_data_dir),
+):
+    """Показания за период одним parquet-файлом (массовое чтение для признаков).
+
+    Постраничный JSON не годится: матрица признаков строится по всей сети сразу.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="export_")) / "sensors.parquet"
+    rows = reader.export_sensors(data_dir, str(tmp), date_from, date_to)
+    if rows == 0:
+        shutil.rmtree(tmp.parent, ignore_errors=True)
+        raise HTTPException(status_code=404, detail="Нет данных за период")
+
+    background.add_task(shutil.rmtree, tmp.parent, ignore_errors=True)
+    return FileResponse(
+        str(tmp),
+        media_type="application/vnd.apache.parquet",
+        filename="sensors.parquet",
+        headers={"X-Rows": str(rows)},
+    )
 
 
 @router.get("/calendar")

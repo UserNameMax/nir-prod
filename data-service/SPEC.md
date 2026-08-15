@@ -32,6 +32,14 @@ Data Service — единственный writer хранилища. Это пр
 - Поиск и фильтрация объектов
 - Upsert: при повторной загрузке старые записи имеют приоритет
 
+### Верифицированные аварии (incidents)
+- Хранение подтверждённых аварийных событий — **метки для обучения предиктивных
+  моделей** (потребитель: training-service)
+- Дедупликация по `incident_id` (идемпотентность повторной загрузки)
+- Запрос с фильтрацией по объекту и окну времени открытия инцидента
+- Незакрытая авария допустима: `close_ts` может отсутствовать
+- Список объектов, у которых есть хотя бы одна авария
+
 ### Общие требования
 - Атомарная запись (без частичных состояний)
 - Запись строго последовательная (один активный writer)
@@ -103,9 +111,34 @@ POST /objects/bulk
     → BulkResult
 ```
 
+### Incidents
+
+```
+GET /incidents
+    ?object_id=<str>
+    &from_ts=<unix>       фильтр по времени ОТКРЫТИЯ инцидента
+    &to_ts=<unix>
+    &offset=0&limit=1000
+    → Page[Incident]      сортировка по incident_ts
+
+GET /incidents/objects
+    → list[str]           object_id, у которых есть аварии
+
+POST /incidents/bulk
+    body: Incident[]      дедупликация по incident_id
+    → BulkResult
+```
+
 ### Схемы
 
 ```python
+class Incident:
+    incident_id: str        # уникальный идентификатор аварии
+    object_id: str
+    incident_ts: int        # unix seconds — открытие аварии
+    close_ts: int | None    # закрытие; None — авария не закрыта
+    source: str | None      # источник метки (заявки, тех. нарушения)
+
 class SensorRecord:
     record_id: str          # уникальный идентификатор измерения
     object_id: str          # идентификатор объекта
@@ -161,6 +194,10 @@ class Page[T]:
 |------|------------------|---------|
 | `sensors.parquet` | `record_id` (string) | Временные ряды датчиков, 55M+ строк, ~1 ГБ |
 | `objects_meta.parquet` | `object_id` (string) | Справочник объектов, ~4.5k строк |
+| `incidents.parquet` | `incident_id` (string) | Верифицированные аварии (метки обучения), сотни строк |
+
+`incident_ts` / `close_ts` пишутся как nullable `Int64`: партия, где все аварии не
+закрыты, иначе сделала бы колонку `float64` и схема parquet «плыла» бы между загрузками.
 
 Путь задаётся через env `DATA_DIR` (default: `/app/data`).
 

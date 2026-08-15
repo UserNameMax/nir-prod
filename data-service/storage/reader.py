@@ -32,6 +32,14 @@ def _meta_path(data_dir: str) -> str:
     return str(Path(data_dir) / "objects_meta.parquet")
 
 
+def _incidents_path(data_dir: str) -> str:
+    return str(Path(data_dir) / "incidents.parquet")
+
+
+def _quote(value: str) -> str:
+    return value.replace("'", "''")
+
+
 def _file_exists(path: str) -> bool:
     return os.path.exists(path)
 
@@ -135,6 +143,115 @@ def read_sensors_health(data_dir: str) -> dict:
     ).fetchone()
     con.close()
     return {"sensors_count": row[0], "sensors_total": row[0], "period_from": row[1], "period_to": row[2]}
+
+
+def export_sensors(
+    data_dir: str,
+    out_path: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """Выгрузить показания за период в parquet-файл. Возвращает число строк.
+
+    Массовое чтение (инженерия признаков) не помещается в постраничный JSON:
+    DuckDB стримит выборку прямо в parquet, симметрично staging-пути на запись.
+    """
+    path = _sensors_path(data_dir)
+    if not _file_exists(path):
+        return 0
+
+    con = _con(data_dir)
+    conditions = ["1=1"]
+    if date_from:
+        conditions.append(
+            f"ts_recorded >= epoch(CAST('{_quote(date_from)}' AS TIMESTAMP))"
+        )
+    if date_to:
+        # включительно: до конца суток date_to
+        conditions.append(
+            f"ts_recorded < epoch(CAST('{_quote(date_to)}' AS TIMESTAMP) + INTERVAL 1 DAY)"
+        )
+    where = "WHERE " + " AND ".join(conditions)
+
+    con.execute(
+        f"""
+        COPY (
+            SELECT object_id, ts_measurement, ts_recorded,
+                   t_supply, t_return, p_supply, p_return
+            FROM read_parquet('{path}') {where}
+            ORDER BY object_id, ts_recorded
+        ) TO '{out_path}' (FORMAT PARQUET)
+        """
+    )
+    rows = con.execute(f"SELECT COUNT(*) FROM read_parquet('{out_path}')").fetchone()[0]
+    con.close()
+    return rows
+
+
+def read_incidents(
+    data_dir: str,
+    object_id: str | None = None,
+    from_ts: int | None = None,
+    to_ts: int | None = None,
+    offset: int = 0,
+    limit: int = 1000,
+) -> tuple[list[dict], int]:
+    """Верифицированные аварии. Фильтр по объекту и окну открытия инцидента."""
+    path = _incidents_path(data_dir)
+    if not _file_exists(path):
+        return [], 0
+
+    con = _con(data_dir)
+    conditions = ["1=1"]
+    if object_id:
+        conditions.append(f"object_id = '{_quote(object_id)}'")
+    if from_ts is not None:
+        conditions.append(f"incident_ts >= {from_ts}")
+    if to_ts is not None:
+        conditions.append(f"incident_ts <= {to_ts}")
+    where = "WHERE " + " AND ".join(conditions)
+
+    total = con.execute(
+        f"SELECT COUNT(*) FROM read_parquet('{path}') {where}"
+    ).fetchone()[0]
+
+    rows = con.execute(
+        f"SELECT * FROM read_parquet('{path}') {where} "
+        f"ORDER BY incident_ts LIMIT {limit} OFFSET {offset}"
+    ).df()
+
+    con.close()
+    return _sanitize(rows.to_dict(orient="records")), total
+
+
+def read_incident_object_ids(data_dir: str) -> list[str]:
+    """Список object_id, у которых есть хотя бы одна авария."""
+    path = _incidents_path(data_dir)
+    if not _file_exists(path):
+        return []
+
+    con = _con(data_dir)
+    rows = con.execute(
+        f"SELECT DISTINCT object_id FROM read_parquet('{path}') ORDER BY object_id"
+    ).fetchall()
+    con.close()
+    return [r[0] for r in rows]
+
+
+def read_incidents_health(data_dir: str) -> dict:
+    path = _incidents_path(data_dir)
+    if not _file_exists(path):
+        return {"incidents_count": 0, "incidents_objects": 0}
+
+    con = _con(data_dir)
+    row = con.execute(
+        f"""
+        SELECT COUNT(*) AS cnt, COUNT(DISTINCT object_id) AS objects
+        FROM read_parquet('{path}')
+        """
+    ).fetchone()
+    con.close()
+    return {"incidents_count": row[0], "incidents_objects": row[1]}
 
 
 def read_objects_by_day(

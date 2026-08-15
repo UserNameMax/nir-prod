@@ -9,6 +9,7 @@ from pathlib import Path
 
 _sensors_lock = threading.Lock()
 _meta_lock = threading.Lock()
+_incidents_lock = threading.Lock()
 
 SENSORS_SCHEMA = {
     "record_id": "VARCHAR",
@@ -28,6 +29,14 @@ META_SCHEMA = {
     "facility_name": "VARCHAR",
     "municipality": "VARCHAR",
     "rso": "VARCHAR",
+}
+
+INCIDENTS_SCHEMA = {
+    "incident_id": "VARCHAR",
+    "object_id": "VARCHAR",
+    "incident_ts": "BIGINT",
+    "close_ts": "BIGINT",
+    "source": "VARCHAR",
 }
 
 
@@ -184,6 +193,43 @@ def bulk_upsert_objects(
             os.replace(path + ".tmp", path)
 
         return len(new_objects), skipped
+
+
+def bulk_insert_incidents(
+    data_dir: str, records: list[dict]
+) -> tuple[int, int]:
+    """Upsert аварий по incident_id. Возвращает (inserted, skipped_duplicates)."""
+    if not records:
+        return 0, 0
+
+    path = str(Path(data_dir) / "incidents.parquet")
+    new_df = pd.DataFrame(records)
+    new_df["incident_id"] = new_df["incident_id"].astype(str)
+    new_df["object_id"] = new_df["object_id"].astype(str)
+    # Nullable Int64: у незакрытой аварии close_ts пуст. Без явного типа партия
+    # со сплошным None делает колонку float64 — схема parquet «плыла» бы между
+    # загрузками.
+    new_df["incident_ts"] = new_df["incident_ts"].astype("Int64")
+    new_df["close_ts"] = new_df["close_ts"].astype("Int64")
+    new_df = new_df.drop_duplicates(subset=["incident_id"])
+
+    with _incidents_lock:
+        if not os.path.exists(path):
+            new_df.to_parquet(path, index=False)
+            return len(new_df), 0
+
+        existing_ids = _read_ids(path, "incident_id")
+        to_insert = new_df[~new_df["incident_id"].isin(existing_ids)]
+        skipped = len(new_df) - len(to_insert)
+
+        if not to_insert.empty:
+            # аварий немного (сотни) — pandas здесь ок
+            existing = pd.read_parquet(path)
+            merged = pd.concat([existing, to_insert], ignore_index=True)
+            merged.to_parquet(path + ".tmp", index=False)
+            os.replace(path + ".tmp", path)
+
+        return len(to_insert), skipped
 
 
 def update_object(data_dir: str, object_id: str, updates: dict) -> dict | None:

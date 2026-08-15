@@ -16,6 +16,15 @@ class SensorRecord(BaseModel):
     ts_recorded: int
 
 
+class Incident(BaseModel):
+    """Верифицированная авария — метка для обучения предиктивных моделей."""
+    incident_id: str
+    object_id: str
+    incident_ts: int
+    close_ts: int | None = None
+    source: str | None = None
+
+
 class ObjectMeta(BaseModel):
     object_id: str
     object_type: str | None = None

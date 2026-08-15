@@ -29,18 +29,116 @@ services:
         limits:
           memory: 4g
 
+  labeling-service:
+    build: ./labeling-service
+    ports:
+      - "8006:8006"
+    environment:
+      DATA_SERVICE_URL: http://data-service:8000
+      DATA_DIR: /app/data
+      # Ollama на host-машине (единственная внешняя точка сервиса)
+      OLLAMA_URL: http://host.docker.internal:11434/api/chat
+      LLM_MODEL: qwen3.5
+      FUZZY_THRESHOLD: "85"
+    volumes:
+      - labeling:/app/data:rw
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - data-service
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+
+  weather-service:
+    build: ./weather-service
+    ports:
+      - "8003:8003"
+    environment:
+      WEATHER_DIR: /app/data
+      WEATHER_REGION: moscow
+    volumes:
+      - weather:/app/data:rw
+    restart: unless-stopped
+
+  feature-service:
+    build: ./feature-service
+    ports:
+      - "8002:8002"
+    environment:
+      FEATURE_DIR: /app/data
+      DATA_SERVICE_URL: http://data-service:8000
+      WEATHER_SERVICE_URL: http://weather-service:8003
+    volumes:
+      - features:/app/data:rw
+    depends_on:
+      - data-service
+      - weather-service
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 12g
+
+  training-service:
+    build: ./training-service
+    ports:
+      - "8004:8004"
+    environment:
+      MODEL_BUNDLE_DIR: /models
+      FEATURE_SERVICE_URL: http://feature-service:8002
+      DATA_SERVICE_URL: http://data-service:8000
+    volumes:
+      - models:/models:rw
+    depends_on:
+      - feature-service
+      - data-service
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 12g
+
+  ml-service:
+    build: ./ml-service
+    ports:
+      - "8005:8005"
+    environment:
+      MODEL_BUNDLE_DIR: /models
+      FEATURE_SERVICE_URL: http://feature-service:8002
+      DATA_SERVICE_URL: http://data-service:8000
+    volumes:
+      - models:/models:ro
+    depends_on:
+      - feature-service
+      - data-service
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+
   viewer:
     build:
       context: ./viewer
       args:
         VITE_DATA_API_URL: http://localhost:8000
         VITE_INGEST_API_URL: http://localhost:8001
+        VITE_ML_API_URL: http://localhost:8005
     ports:
-      - "3000:3000"
+      # 3000 занят демо-стендом (demo/docker-compose.yml) — не конфликтуем с ним
+      - "3001:3000"
     depends_on:
       - data-service
       - ingestion-service
+      - ml-service
     restart: unless-stopped
 
 volumes:
   incoming:
+  weather:
+  features:
+  models:
+  labeling:
